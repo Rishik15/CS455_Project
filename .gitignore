@@ -1,5 +1,1 @@
-# raw text from data.zip (too big for GitHub); the .bin token files are committed
-data/*.txt
-data.zip
-build/
-prep_data
+data/
