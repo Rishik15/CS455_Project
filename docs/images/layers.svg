@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 770 510" width="770" height="510">
+<rect width="770" height="510" fill="#ffffff"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#444"/></marker></defs>
+<rect x="250" y="30" width="480" height="60" rx="6" fill="#f2f2f2" stroke="#555555" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="490.0" y="57.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">train/*.c</text>
+<text x="490.0" y="74.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">training loop: serial, mpi, cuda, mpi_cuda (planned)</text>
+<rect x="250" y="150" width="108" height="60" rx="6" fill="#f2f2f2" stroke="#555555" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="304.0" y="177.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">dataloader</text>
+<text x="304.0" y="194.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">planned</text>
+<line x1="304" y1="90" x2="304" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="374" y="150" width="108" height="60" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5" />
+<text x="428.0" y="177.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">model.c</text>
+<text x="428.0" y="194.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">GPT struct</text>
+<line x1="428" y1="90" x2="428" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="498" y="150" width="108" height="60" rx="6" fill="#f2f2f2" stroke="#555555" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="552.0" y="177.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">optimizer</text>
+<text x="552.0" y="194.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">planned</text>
+<line x1="552" y1="90" x2="552" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="622" y="150" width="108" height="60" rx="6" fill="#f2f2f2" stroke="#555555" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="676.0" y="177.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">tokenizer</text>
+<text x="676.0" y="194.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">planned</text>
+<line x1="676" y1="90" x2="676" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="318" y="270" width="220" height="60" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5" />
+<text x="428.0" y="297.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">ops</text>
+<text x="428.0" y="314.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">src/cpu or src/cuda, ops.h</text>
+<line x1="428" y1="210" x2="428" y2="270" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="250" y="390" width="480" height="60" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5" />
+<text x="490.0" y="417.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">config.h, utils.h / utils.c</text>
+<text x="490.0" y="434.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">used by model.c and the training loop; ops use only ops.h</text>
+<rect x="20" y="60" width="130" height="50" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5" />
+<text x="85.0" y="82.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">tools/prep_data</text>
+<text x="85.0" y="99.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">run once</text>
+<rect x="20" y="150" width="130" height="60" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5" />
+<text x="85.0" y="177.0" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#111">data/*.bin</text>
+<text x="85.0" y="194.0" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">train, val, vocab</text>
+<line x1="85" y1="110" x2="85" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="150" y1="180" x2="250" y2="180" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="156" y="172" font-family="sans-serif" font-size="11" fill="#333">reads</text>
+<rect x="250" y="475" width="14" height="14" rx="3" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="272" y="487" font-family="sans-serif" font-size="12" fill="#111">exists</text>
+<rect x="340" y="475" width="14" height="14" rx="3" fill="#f2f2f2" stroke="#555555" stroke-width="1.5" stroke-dasharray="3 2"/>
+<text x="362" y="487" font-family="sans-serif" font-size="12" fill="#111">planned</text>
+<text x="450" y="487" font-family="sans-serif" font-size="12" fill="#111">arrow = includes / calls</text>
+</svg>

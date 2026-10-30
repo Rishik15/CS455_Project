@@ -1,18 +1,5 @@
-# CS455_Project
+# CS455 Project
 
-## Setup the data on your system
+A small language model written from scratch in C. It learns to write short children's stories by reading the TinyStories dataset and predicting the next piece of text.
 
-1. Download [data.zip](https://drive.google.com/file/d/1kJMImMGOJ1NKqi7hmqHsEl7zp-U8H6HQ/view?usp=drive_link) from Google Drive.
-2. Move it into the root of this repo and unzip it:
-
-   ```
-   unzip data.zip
-   ```
-
-3. You should now have:
-
-   ```
-   data/
-   ├── TinyStories-train.txt
-   └── TinyStories-valid.txt
-   ```
+We train it four ways and compare the speed: on one CPU, across several machines with MPI, on one GPU with CUDA, and across several machines with GPUs (MPI + CUDA).

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 1050" width="640" height="1050">
+<rect width="640" height="1050" fill="#ffffff"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#444"/></marker></defs>
+<rect x="440" y="10" width="14" height="14" rx="3" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="462" y="22" font-family="sans-serif" font-size="12" fill="#111">matmul</text>
+<rect x="440" y="30" width="14" height="14" rx="3" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="462" y="42" font-family="sans-serif" font-size="12" fill="#111">all other ops</text>
+<rect x="130" y="50" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="69" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">tokens</text>
+<text x="270.0" y="86" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">int ids [B, T]</text>
+<line x1="270" y1="94" x2="270" y2="110" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="110" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="129" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">encoder_forward</text>
+<text x="270.0" y="146" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">wte[token] + wpe[t] -&gt; [B,T,C]</text>
+<line x1="270" y1="154" x2="270" y2="212" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="90" y="176" width="430" height="618" rx="10" fill="none" stroke="#555" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="102" y="196" font-family="sans-serif" font-size="13" font-weight="bold" fill="#111">Block x n_layers</text>
+<rect x="130" y="212" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="231" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">layernorm_forward</text>
+<text x="270.0" y="248" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">ln1: normalize each token over C</text>
+<line x1="270" y1="256" x2="270" y2="270" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="270" width="280" height="44" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="270.0" y="289" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">matmul_forward</text>
+<text x="270.0" y="306" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">qkv: C -&gt; 3C</text>
+<line x1="270" y1="314" x2="270" y2="328" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="328" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="347" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">attention_forward</text>
+<text x="270.0" y="364" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">causal, per head, mixes across tokens</text>
+<line x1="270" y1="372" x2="270" y2="386" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="386" width="280" height="44" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="270.0" y="405" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">matmul_forward</text>
+<text x="270.0" y="422" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">attproj: C -&gt; C</text>
+<line x1="270" y1="430" x2="270" y2="444" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="444" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="463" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">residual_forward</text>
+<text x="270.0" y="480" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">residual2 = x + attention branch</text>
+<line x1="270" y1="488" x2="270" y2="502" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="502" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="521" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">layernorm_forward</text>
+<text x="270.0" y="538" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">ln2: normalize each token over C</text>
+<line x1="270" y1="546" x2="270" y2="560" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="560" width="280" height="44" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="270.0" y="579" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">matmul_forward</text>
+<text x="270.0" y="596" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">fc (MLP up): C -&gt; 4C</text>
+<line x1="270" y1="604" x2="270" y2="618" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="618" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="637" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">gelu_forward</text>
+<text x="270.0" y="654" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">fch_gelu = gelu(fch), tanh approx</text>
+<line x1="270" y1="662" x2="270" y2="676" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="676" width="280" height="44" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="270.0" y="695" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">matmul_forward</text>
+<text x="270.0" y="712" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">fcproj (MLP down): 4C -&gt; C</text>
+<line x1="270" y1="720" x2="270" y2="734" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="734" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="753" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">residual_forward</text>
+<text x="270.0" y="770" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">residual3 = residual2 + mlp branch</text>
+<circle cx="270" cy="200" r="3" fill="#444"/>
+<path d="M270 200 H440 V466 H410" fill="none" stroke="#444" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<text x="450" y="333" font-family="sans-serif" font-size="11" fill="#333">skip</text>
+<circle cx="270" cy="495" r="3" fill="#444"/>
+<path d="M270 495 H440 V756 H410" fill="none" stroke="#444" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a)"/>
+<text x="450" y="625" font-family="sans-serif" font-size="11" fill="#333">skip</text>
+<line x1="270" y1="778" x2="270" y2="830" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="830" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="849" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">layernorm_forward</text>
+<text x="270.0" y="866" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">lnf: final norm</text>
+<line x1="270" y1="874" x2="270" y2="902" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="902" width="280" height="44" rx="6" fill="#cfe3ff" stroke="#1f4e8c" stroke-width="1.5"/>
+<text x="270.0" y="921" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">matmul_forward</text>
+<text x="270.0" y="938" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">logits: C -&gt; V, tied wte</text>
+<line x1="270" y1="946" x2="270" y2="974" stroke="#444" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="130" y="974" width="280" height="44" rx="6" fill="#fde9c9" stroke="#8a5a00" stroke-width="1.5"/>
+<text x="270.0" y="993" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#111">crossentropy_forward</text>
+<text x="270.0" y="1010" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#222">softmax + mean loss vs targets</text>
+</svg>
