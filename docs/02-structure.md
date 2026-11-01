@@ -16,9 +16,9 @@ Only the low-level math changes between the four versions. The model wiring, dat
 ├── README.md
 ├── .gitignore                data/*.txt, data/*.bin, build/
 ├── .clangd                   editor setting: adds -Iinclude so Zed finds headers
-├── data/                     TinyStories-train.txt, train.bin, val.bin, vocab.bin (not in git)
+├── data/                     TinyStories-*.txt, train.bin, val.bin, vocab.bin, merges.bin (not in git)
 ├── docs/
-│   ├── 01-model.md, 02-structure.md
+│   ├── 01-model.md, 02-structure.md, 03-files.md, 04-remaining.md, 05-bpe.md
 │   ├── transformer_training_loop_md.md
 │   └── images/               forward-pass.svg, layers.svg
 ├── include/
@@ -30,9 +30,9 @@ Only the low-level math changes between the four versions. The model wiring, dat
 │   ├── dataloader.h          (empty) batches from train.bin / val.bin
 │   └── optimizer.h           (empty) AdamW
 ├── tools/                    offline data prep, run once
-│   ├── prep_data.c           read, split, filter, train BPE, encode, write .bin files
-│   ├── pretokenize.c/.h      (empty) split text into pieces + hash table of piece counts
-│   └── bpe_train.c/.h        (empty) BPE merge loop over the piece table
+│   ├── prep_data.c           main: read, split, filter, train BPE, encode, write .bin files
+│   ├── pretokenize.c/.h      split text into pieces + hash table of piece counts
+│   └── bpe_train.c/.h        BPE merge loop over the piece table, encode a piece
 ├── src/
 │   ├── model.c               buffers, init, wires ops into forward/backward
 │   ├── utils.c
@@ -51,7 +51,7 @@ Only the low-level math changes between the four versions. The model wiring, dat
     └── test_tokenizer.c      (empty) decode(encode(text)) == text
 ```
 
-`tools/prep_data.c` still holds the old all-in-one word-level prep (steps 1-5 done). It is to be split into `pretokenize`, `bpe_train` and a short `main`.
+Data prep is done: `tools/prep_data.c` (the `main`), `tools/pretokenize.c` and `tools/bpe_train.c` train the BPE tokenizer and write the `.bin` files. See [05-bpe.md](05-bpe.md).
 
 The old `embedding.c` / `embedding.h` were replaced by `src/cpu/encoder.c` and the declarations in `include/ops.h`. Their pieces moved:
 
@@ -118,7 +118,7 @@ If an op includes `model.h`, something is in the wrong layer.
 ```
 TinyStories-train.txt
   -> tools/prep_data
-  -> train.bin, val.bin (uint16 ids) + vocab.bin
+  -> train.bin, val.bin (uint16 ids) + vocab.bin, merges.bin
   -> dataloader: inputs[B*T], targets = inputs shifted by one
   -> model + ops: loss, grads
   -> optimizer: updated params
@@ -166,6 +166,13 @@ Every other version must match serial's loss at the same step within floating-po
 
 ```
 gcc -std=c99 -O3 -Iinclude src/*.c src/cpu/*.c train/train_serial.c -lm -o train_serial
+```
+
+Data prep (run once, from the repo root):
+
+```
+gcc -std=c99 -O2 -Iinclude tools/prep_data.c tools/pretokenize.c tools/bpe_train.c src/utils.c -o prep_data
+./prep_data
 ```
 
 ## Where to edit

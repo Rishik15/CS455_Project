@@ -1,253 +1,353 @@
 /*
-data_prep
-
-1. read the training.txt file (20MB) (DONE)
-2. split up the stories in the 20MB and change the delimeter to '\0' (DONE)
-3. check that the stories contain only valid characters 32-126 + \n (DONE)
-4. split the stories into word tokens and count each token, stopping once there are TARGET_TOKENS tokens (DONE)
-5. pick the vocab: end-of-story, unknown, then the most common tokens; give each an id (DONE)
-6. encode the stories used in step 4 as token ids (unknown id for rare words)
-7. write the encoded stories into train.bin (2 bytes per token)
-8. write the vocab into vocab.bin
-
+ * prep_data.c
+ * Offline data prep, run once from the repo root. Reads TinyStories, keeps
+ * the stories made only of printable ASCII (32-126) and '\n', learns a
+ * VOCAB_SIZE-token BPE vocab from the first TOKENIZER_CHARS characters of
+ * training stories, and writes:
+ *   data/train.bin    whole stories until there are TARGET_TOKENS + 1 ids
+ *   data/val.bin      every clean story in TinyStories-valid.txt
+ *   data/vocab.bin    int32 vocab_size, then for each id in order: 1 byte length,
+ *                     then the token's characters (id 0 is stored as "<eos>").
+ *                     Printing each id's characters back to back gives the text.
+ *   data/merges.bin   int32 n_merges, then per merge uint16 left, uint16 right.
+ *                     Merge i makes id 97 + i. Needed to encode prompts.
+ * The .bin token files are uint16 ids: EOS story EOS story ... story EOS.
+ * Build: gcc -std=c99 -O2 -Iinclude tools/prep_data.c tools/pretokenize.c
+ *        tools/bpe_train.c src/utils.c -o prep_data
  */
+#include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <stdint.h>
+#include "bpe_train.h"
+#include "pretokenize.h"
+#include "utils.h"
 
-#define READ_BYTES    (25 * 1024 * 1024)   // first 25 MB of the file (20 MB is just short of 5M word tokens)
-#define MAX_STORIES   100000
-#define TARGET_TOKENS 5000000
-#define VOCAB_SIZE    4096
-#define TABLE_SIZE    65536                // hash table slots: power of 2, well above the ~15K distinct tokens
-#define EOS_ID 0                           // end-of-story token
-#define UNK_ID 1                           // unknown token, for words not in the vocab
+#define TRAIN_TEXT "data/TinyStories-train.txt"
+#define VAL_TEXT "data/TinyStories-valid.txt"
+#define TRAIN_FILE "data/train.bin"
+#define VAL_FILE "data/val.bin"
+#define VOCAB_FILE "data/vocab.bin"
+#define MERGES_FILE "data/merges.bin"
+#define TRAIN_READ_BYTES (25L * 1024 * 1024)
+#define TOKENIZER_CHARS 20000000L
+#define TARGET_TOKENS 5000000L
+#define VOCAB_SIZE 4096
+#define CHUNK_TOKENS (1 << 20)
 #define SEP "<|endoftext|>"
 
 typedef struct {
-    int index;
     int length;
     char *start;
 } Story;
 
-// one distinct token in the hash table
+/*
+ * StorySet
+ * The text buffer and the kept stories, which point into it ('\0'-terminated).
+ * longest is the longest story's length.
+ */
 typedef struct {
-    const char *start;  // points into buffer
-    int len;
-    int count;          // how many times it appears
-    int id;             // token id, -1 if it didn't make the vocab
-} Entry;
+    char *buffer;
+    Story *stories;
+    int count;
+    int longest;
+} StorySet;
 
-// Length of the token that starts at p. Words, numbers and punctuation marks
-// keep the single space in front of them (" said", " \""), and '\n' is its own
-// token, so gluing the tokens back together gives the original text.
-static int token_length(const char *p) {
-    int i = 0;
-    if (p[0] == '\n') return 1;
-    if (p[0] == ' ') i = 1;  // optional leading space
-    if (isalpha((unsigned char)p[i])) {
-        while (isalpha((unsigned char)p[i])) i++;
-    } else if (isdigit((unsigned char)p[i])) {
-        while (isdigit((unsigned char)p[i])) i++;
-    } else if (p[i] != ' ' && p[i] != '\n' && p[i] != '\0') {
-        i++;  // one punctuation mark
-    }
-    return i > 0 ? i : 1;  // a space with nothing after it is a token on its own
-}
-
-// FNV-1a hash of len bytes
-static uint32_t hash(const char *s, int len) {
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < len; i++) {
-        h ^= (unsigned char)s[i];
-        h *= 16777619u;
-    }
-    return h;
-}
-
-// Returns the slot holding this token, or the empty slot where it belongs.
-// If the slot is taken by a different token, try the next one (linear probing).
-static Entry *find_slot(Entry *table, const char *s, int len) {
-    uint32_t i = hash(s, len) & (TABLE_SIZE - 1);
-    while (table[i].start != NULL &&
-           !(table[i].len == len && memcmp(table[i].start, s, len) == 0)) {
-        i = (i + 1) & (TABLE_SIZE - 1);
-    }
-    return &table[i];
-}
-
-// qsort order for the vocab: most common first, ties broken by the token text
-static int compare_entries(const void *a, const void *b) {
-    const Entry *x = *(Entry *const *)a;
-    const Entry *y = *(Entry *const *)b;
-    if (x->count != y->count) return y->count - x->count;
-    int n = x->len < y->len ? x->len : y->len;
-    int c = memcmp(x->start, y->start, n);
-    if (c != 0) return c;
-    return x->len - y->len;
-}
-
-int main(void) {
-    FILE *file = fopen("data/TinyStories-train.txt", "rb");
+/*
+ * read_text
+ * Reads up to max_bytes of the file (all of it if max_bytes < 0) into a
+ * '\0'-terminated buffer.
+ */
+static char *read_text(const char *path, long max_bytes) {
+    FILE *file = fopen(path, "rb");
     if (file == NULL) {
-        perror("failed to read training data from file");
-        return 1;
+        perror(path);
+        exit(1);
     }
-
-    char *buffer = malloc(sizeof(char) * READ_BYTES+1);
-    if (buffer == NULL) {
-        perror("Failed to allocate memory for buffer");
-        fclose(file);
-        return 1;
+    if (max_bytes < 0) {
+        fseek(file, 0, SEEK_END);
+        max_bytes = ftell(file);
+        fseek(file, 0, SEEK_SET);
     }
-
-    size_t data_read = fread(buffer, sizeof(char), READ_BYTES, file); // get number of data read
+    char *buffer = xmalloc(max_bytes + 1, "text buffer");
+    size_t n = fread(buffer, 1, max_bytes, file);
     fclose(file);
+    buffer[n] = '\0';
+    printf("read %zu bytes from %s\n", n, path);
+    return buffer;
+}
 
-    printf("Successfully read %zu bytes into memory.\n", data_read);
-    buffer[data_read] = '\0'; // null terminate end of data
-
-    char *story_end;
-    Story *stories = (Story *)malloc(sizeof(Story) * MAX_STORIES); // array to store stories
-    int story_count = 0;
+/*
+ * split_stories
+ * Cuts the buffer at each SEP, trims whitespace around each story and skips
+ * empty ones. Text after the last SEP is ignored, since it may be cut off.
+ * Returns a growing array of stories and sets *count.
+ */
+static Story *split_stories(char *buffer, int *count) {
+    int capacity = 1024;
+    Story *stories = xmalloc(sizeof(Story) * capacity, "stories");
     char *curr = buffer;
-
-    if (stories == NULL) {
-        printf("Memory allocation failed\n");
-        free(buffer);
-        return 1;
-    }
-
-    //separate stories, remove trailing and leading white space
-    while ((story_end = strstr(curr, SEP)) && story_count < MAX_STORIES){
-        *story_end = '\0'; // replace <|endoftext|> with null terminator
+    char *story_end;
+    *count = 0;
+    while ((story_end = strstr(curr, SEP))) {
+        *story_end = '\0';
         char *p = curr;
-        char *end = story_end-1;
-
-        while (*p && isspace((unsigned char)*p)){p++;}
+        char *end = story_end - 1;
+        while (*p && isspace((unsigned char)*p)) p++;
         while (end >= p && isspace((unsigned char)*end)) {
-            *end='\0';
+            *end = '\0';
             end--;
         }
-
-        //skips empty stories
-        int length=end-p+1;
-        if (length>0) {
-            stories[story_count].index = story_count;
-            stories[story_count].length = length;
-            stories[story_count].start = p;
-            story_count++;
-        }
-
-        curr = story_end+strlen(SEP);
-    }
-
-    Story *kept_stories = malloc(sizeof(Story) * MAX_STORIES);
-    if (kept_stories == NULL) {
-        printf("Memory allocation failed\n");
-        free(buffer);
-        free(stories);
-        return 1;
-    }
-    int kept_count=0;
-    int store_flag;
-    for (int i=0; i<story_count; i++) {
-        store_flag = 1;
-        char *c=stories[i].start;
-        while (*c) {
-            if (*c != '\n' && (*c<32 || *c>126)) {
-                store_flag = 0;
-                break;
+        int length = (int)(end - p + 1);
+        if (length > 0) {
+            if (*count == capacity) {
+                Story *bigger = xmalloc(sizeof(Story) * capacity * 2, "stories");
+                memcpy(bigger, stories, sizeof(Story) * capacity);
+                free(stories);
+                stories = bigger;
+                capacity *= 2;
             }
-            c++;
+            stories[*count].length = length;
+            stories[*count].start = p;
+            (*count)++;
         }
-        if (store_flag) {
-            kept_stories[kept_count] = stories[i];
-            kept_count++;
+        curr = story_end + strlen(SEP);
+    }
+    return stories;
+}
+
+/*
+ * is_clean
+ * True if every character has a token id (printable ASCII or '\n').
+ */
+static int is_clean(const Story *s) {
+    for (int i = 0; i < s->length; i++) {
+        if (bpe_char_id(s->start[i]) < 0) return 0;
+    }
+    return 1;
+}
+
+/*
+ * load_stories
+ * Reads (all of the file if max_bytes < 0), splits and filters, keeping the
+ * clean stories in their original order.
+ */
+static StorySet load_stories(const char *path, long max_bytes) {
+    StorySet set = {0};
+    int found;
+    set.buffer = read_text(path, max_bytes);
+    set.stories = split_stories(set.buffer, &found);
+    for (int i = 0; i < found; i++) {
+        if (!is_clean(&set.stories[i])) continue;
+        set.stories[set.count++] = set.stories[i];
+        if (set.stories[i].length > set.longest) set.longest = set.stories[i].length;
+    }
+    printf("%d stories, %d kept (printable ASCII and newlines only)\n", found, set.count);
+    return set;
+}
+
+/*
+ * encode_story
+ * Appends the story's ids to out and returns how many were added. Pieces seen
+ * while training the tokenizer already hold their ids; other pieces are
+ * encoded with the learned merges. scratch needs room for the longest piece.
+ */
+static long encode_story(const Story *s, const PieceTable *pieces, const Bpe *bpe,
+                         uint16_t *out, int *scratch) {
+    long t = 0;
+    const char *p = s->start;
+    const char *end = p + s->length;
+    while (p < end) {
+        int len = piece_length(p);
+        const Piece *piece = piece_table_find(pieces, p, len);
+        const int *ids = piece->ids;
+        int n = piece->n_ids;
+        if (piece->start == NULL) {
+            n = bpe_encode(bpe, p, len, scratch);
+            ids = scratch;
+        }
+        for (int k = 0; k < n; k++) out[t++] = (uint16_t)ids[k];
+        p += len;
+    }
+    return t;
+}
+
+/*
+ * write_or_die
+ * fwrite that exits with the file name on a short write.
+ */
+static void write_or_die(const void *data, size_t size, size_t count, FILE *f,
+                         const char *path) {
+    if (fwrite(data, size, count, f) != count) {
+        perror(path);
+        exit(1);
+    }
+}
+
+/*
+ * open_or_die
+ * fopen for writing that exits with the file name on failure.
+ */
+static FILE *open_or_die(const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        perror(path);
+        exit(1);
+    }
+    return f;
+}
+
+/*
+ * close_or_die
+ * fclose that exits if buffered data could not be written.
+ */
+static void close_or_die(FILE *f, const char *path) {
+    if (fclose(f) != 0) {
+        perror(path);
+        exit(1);
+    }
+}
+
+/*
+ * write_stories
+ * Writes EOS story EOS story ... story EOS, adding whole stories until there
+ * are at least max_tokens + 1 ids (the +1 because each target is the next
+ * id), or every story if max_tokens < 0. Ids are written in chunks of about
+ * CHUNK_TOKENS. Exits if the stories run out first.
+ */
+static void write_stories(const char *path, const StorySet *set, const PieceTable *pieces,
+                          const Bpe *bpe, long max_tokens) {
+    FILE *f = open_or_die(path);
+    uint16_t *buf = xmalloc(sizeof(uint16_t) * (CHUNK_TOKENS + set->longest + 2), "ids");
+    int *scratch = xmalloc(sizeof(int) * set->longest, "scratch ids");
+    long written = 0;
+    long t = 0;
+    int used = 0;
+    while (used < set->count && (max_tokens < 0 || written + t < max_tokens)) {
+        buf[t++] = BPE_EOS_ID;
+        t += encode_story(&set->stories[used], pieces, bpe, buf + t, scratch);
+        used++;
+        if (t >= CHUNK_TOKENS) {
+            write_or_die(buf, sizeof(uint16_t), t, f, path);
+            written += t;
+            t = 0;
         }
     }
-
-    Entry *table = calloc(TABLE_SIZE, sizeof(Entry));
-    if (table == NULL) {
-        printf("Memory allocation failed\n");
-        free(buffer);
-        free(stories);
-        free(kept_stories);
-        return 1;
+    buf[t++] = BPE_EOS_ID;
+    write_or_die(buf, sizeof(uint16_t), t, f, path);
+    written += t;
+    close_or_die(f, path);
+    free(scratch);
+    free(buf);
+    if (max_tokens >= 0 && written < max_tokens + 1) {
+        fprintf(stderr, "only %ld tokens from %d stories, read more bytes\n", written, used);
+        exit(1);
     }
+    printf("wrote %ld tokens (%d stories) to %s\n", written, used, path);
+}
 
-    //count every token in the stories, until there are TARGET_TOKENS + 1 tokens
-    //(+1 because each training target is the next token)
-    long total_tokens = 1; // end-of-story token at the very end of train.bin
-    int used_count = 0;    // stories needed to reach the target
-    int distinct = 0;
-    for (int i=0; i<kept_count && total_tokens < TARGET_TOKENS+1; i++) {
-        char *p = kept_stories[i].start;
-        char *end = p + kept_stories[i].length;
-        while (p < end) {
-            int len = token_length(p);
-            Entry *e = find_slot(table, p, len);
-            if (e->start == NULL) {
-                if (distinct >= TABLE_SIZE/2) { // keep the table at most half full so probing stays fast
-                    printf("too many distinct tokens, increase TABLE_SIZE\n");
-                    return 1;
-                }
-                e->start = p;
-                e->len = len;
-                e->id = -1;
-                distinct++;
-            }
-            e->count++;
-            total_tokens++;
-            p += len;
+/*
+ * write_vocab
+ * Format described at the top of this file.
+ */
+static void write_vocab(const char *path, const Bpe *bpe) {
+    FILE *f = open_or_die(path);
+    int32_t size = bpe->vocab_size;
+    write_or_die(&size, sizeof(int32_t), 1, f, path);
+    for (int id = 0; id < bpe->vocab_size; id++) {
+        const BpeToken *tok = &bpe->tokens[id];
+        if (tok->len > 255) {
+            fprintf(stderr, "token %d is too long for vocab.bin (%d chars)\n", id, tok->len);
+            exit(1);
         }
-        total_tokens++; // end-of-story token before each story
-        used_count++;
+        unsigned char len8 = (unsigned char)tok->len;
+        write_or_die(&len8, 1, 1, f, path);
+        write_or_die(tok->text, 1, tok->len, f, path);
     }
-    if (total_tokens < TARGET_TOKENS+1) {
-        printf("only %ld tokens, increase READ_BYTES\n", total_tokens);
-        return 1;
-    }
+    close_or_die(f, path);
+    printf("wrote %d tokens to %s\n", bpe->vocab_size, path);
+}
 
-    //sort the distinct tokens, most common first
-    Entry **sorted = malloc(sizeof(Entry *) * distinct);
-    if (sorted == NULL) {
-        printf("Memory allocation failed\n");
-        return 1;
+/*
+ * write_merges
+ * Format described at the top of this file.
+ */
+static void write_merges(const char *path, const Bpe *bpe) {
+    FILE *f = open_or_die(path);
+    int32_t n = bpe->vocab_size - BPE_NUM_BASE;
+    write_or_die(&n, sizeof(int32_t), 1, f, path);
+    for (int id = BPE_NUM_BASE; id < bpe->vocab_size; id++) {
+        uint16_t pair[2] = {(uint16_t)bpe->tokens[id].left, (uint16_t)bpe->tokens[id].right};
+        write_or_die(pair, sizeof(uint16_t), 2, f, path);
     }
-    int n = 0;
-    for (int i=0; i<TABLE_SIZE; i++) {
-        if (table[i].start != NULL) sorted[n++] = &table[i];
-    }
-    qsort(sorted, distinct, sizeof(Entry *), compare_entries);
+    close_or_die(f, path);
+    printf("wrote %d merges to %s\n", n, path);
+}
 
-    //ids: 0 = end-of-story, 1 = unknown, then the most common tokens.
-    //the table is now word_to_id (find_slot, then read id), and sorted[id-2] is id_to_word
-    int vocab_size = 2;
-    long covered = 0;
-    for (int i=0; i<distinct && vocab_size<VOCAB_SIZE; i++) {
-        sorted[i]->id = vocab_size;
-        covered += sorted[i]->count;
-        vocab_size++;
-    }
-
-    long word_tokens = total_tokens - used_count - 1; // without the end-of-story tokens
-    printf("%d stories used, %ld tokens, %d distinct tokens\n", used_count, total_tokens, distinct);
-    printf("vocab: %d ids, covering %.2f%% of word tokens (the rest become unknown)\n",
-           vocab_size, 100.0 * covered / word_tokens);
-    printf("most common:");
-    for (int i=0; i<10; i++) {
-        if (sorted[i]->start[0] == '\n') printf(" [\\n]");
-        else printf(" [%.*s]", sorted[i]->len, sorted[i]->start);
+/*
+ * print_tokens
+ * Prints count tokens starting at id first, with '\n' shown as [\n].
+ */
+static void print_tokens(const char *label, const Bpe *bpe, int first, int count) {
+    printf("%s:", label);
+    for (int id = first; id < first + count && id < bpe->vocab_size; id++) {
+        printf(" [");
+        for (int k = 0; k < bpe->tokens[id].len; k++) {
+            char c = bpe->tokens[id].text[k];
+            if (c == '\n') printf("\\n");
+            else putchar(c);
+        }
+        printf("]");
     }
     printf("\n");
+}
 
-    free(sorted);
-    free(table);
-    free(buffer);
-    free(stories);
-    free(kept_stories);
+/*
+ * train_tokenizer
+ * Counts the pieces in the first training stories, up to TOKENIZER_CHARS
+ * characters, then learns the merges. A fixed amount of text means the vocab
+ * stays the same if more training text is read later (e.g. a larger run).
+ */
+static void train_tokenizer(const StorySet *train, PieceTable *pieces, Bpe *bpe) {
+    piece_table_init(pieces, 65536);
+    long chars = 0;
+    int used = 0;
+    while (used < train->count && chars < TOKENIZER_CHARS) {
+        piece_table_count(pieces, train->stories[used].start, train->stories[used].length);
+        chars += train->stories[used].length;
+        used++;
+    }
+    printf("tokenizer text: %d stories, %ld chars, %d distinct pieces\n", used, chars,
+           pieces->count);
+    bpe_train(bpe, pieces, VOCAB_SIZE);
+    printf("vocab: %d tokens (%d base + %d merges)\n", bpe->vocab_size, BPE_NUM_BASE,
+           bpe->vocab_size - BPE_NUM_BASE);
+    print_tokens("first merges", bpe, BPE_NUM_BASE, 12);
+    print_tokens("last merges", bpe, bpe->vocab_size - 8, 8);
+}
+
+/*
+ * main
+ * Train the tokenizer, then encode and write everything.
+ */
+int main(void) {
+    StorySet train = load_stories(TRAIN_TEXT, TRAIN_READ_BYTES);
+    PieceTable pieces;
+    Bpe bpe;
+    train_tokenizer(&train, &pieces, &bpe);
+    write_stories(TRAIN_FILE, &train, &pieces, &bpe, TARGET_TOKENS);
+
+    StorySet val = load_stories(VAL_TEXT, -1);
+    write_stories(VAL_FILE, &val, &pieces, &bpe, -1);
+    write_vocab(VOCAB_FILE, &bpe);
+    write_merges(MERGES_FILE, &bpe);
+
+    bpe_free(&bpe);
+    piece_table_free(&pieces);
+    free(train.buffer);
+    free(train.stories);
+    free(val.buffer);
+    free(val.stories);
     return 0;
 }

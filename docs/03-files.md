@@ -318,34 +318,66 @@ backward: dlogits[i,v] += (probs[i,v] - (v == target[i])) / (B*T)
 
 ### `tools/prep_data.c`
 
-- **Purpose:** offline data prep, run once. **Current state: only the counting half is done.** The file is one `main` plus helpers; it is not yet split into `pretokenize` and `bpe_train`.
-- **Reads:** `data/TinyStories-train.txt`. It reads the first 25 MiB (`READ_BYTES`).
-- **What it does now:**
+- **Purpose:** offline data prep, run once from the repo root. The `main` that ties `pretokenize` and `bpe_train` together. Background: [05-bpe.md](05-bpe.md).
+- **Reads:** the first 25 MiB of `data/TinyStories-train.txt` (`TRAIN_READ_BYTES`) and all of `data/TinyStories-valid.txt`.
+- **Writes:** `data/train.bin`, `data/val.bin`, `data/vocab.bin`, `data/merges.bin`. The formats are in the file's header comment and in [05-bpe.md](05-bpe.md#output-files).
+- **Steps:**
   1. splits stories on `<|endoftext|>` (`SEP`) and trims whitespace; empty stories are skipped;
-  2. drops stories containing a character outside 32-126 other than `'\n'`;
-  3. splits text into pieces with `token_length`;
-  4. counts pieces in a hash table, until `TARGET_TOKENS` (5,000,000) tokens, counting one end-of-story token per story;
-  5. sorts pieces by count and gives the most common ones ids, up to `VOCAB_SIZE` 4096, with id 0 = end-of-story and id 1 = unknown;
-  6. prints the number of stories, tokens, distinct pieces, coverage by the vocab and the 10 most common pieces.
-- **What it does not do yet:** encode the stories as ids, or write `train.bin` and `vocab.bin`. It frees everything and exits after the printout.
+  2. drops stories containing a character with no token id (anything outside 32-126 other than `'\n'`);
+  3. counts the pieces in the first `TOKENIZER_CHARS` (20M) characters of kept training stories;
+  4. trains BPE up to `VOCAB_SIZE` 4096;
+  5. encodes whole training stories until there are `TARGET_TOKENS + 1` ids, and every validation story;
+  6. writes the four files.
 - **Functions:**
 
 | Function | What it does |
 |---|---|
-| `token_length(p)` | length of the piece starting at `p`: a word (letters), number (digits) or single punctuation mark, each with an optional single leading space; `'\n'` is its own piece; a lone space is a piece |
-| `hash(s, len)` (internal) | FNV-1a hash of `len` bytes |
-| `find_slot(table, s, len)` (internal) | slot holding this piece, or the empty slot where it belongs; linear probing on collision |
-| `compare_entries(a, b)` (internal) | `qsort` order: most common first, ties broken by the text |
-| `main` | everything above |
+| `load_stories(path, max_bytes)` | `read_text`, `split_stories`, then keeps the stories that pass `is_clean` |
+| `train_tokenizer(train, pieces, bpe)` | counts pieces in the tokenizer text, runs `bpe_train`, prints the first and last merges |
+| `write_stories(path, set, pieces, bpe, max_tokens)` | writes `EOS story EOS ... EOS` in chunks, all stories if `max_tokens < 0`; exits if the stories run out first |
+| `encode_story(s, pieces, bpe, out, scratch)` | per piece: copy its ids from the table, or `bpe_encode` it if training never saw it |
+| `write_tokens`, `write_vocab`, `write_merges` | write the files; every write is checked |
 
 - **Details that matter:**
-  - The pieces glue back into the original text, which is what lets BPE be applied piece by piece.
-  - The table has `TABLE_SIZE` 65,536 slots and exits if more than half fills.
-  - `Entry` points into the original buffer instead of copying the text.
-  - `EOS_ID` and `UNK_ID` are defined but not used yet.
-  - The text after the last `<|endoftext|>` is ignored, since stories are found by searching for the separator.
-  - The distinct piece count is about 15K (the team's last count).
-- **What changes:** it is moving to BPE. The piece table becomes the input to BPE training. Merges never cross piece boundaries. Ids become 0 = end-of-story, 1-96 = base characters, the rest learned merges up to 4096, with no unknown token. The remaining work is in `04-remaining.md`.
+  - The text after the last `<|endoftext|>` is ignored, since it may be cut off.
+  - The tokenizer learns from the first 22,450 stories (20M characters); `train.bin` uses the first 22,003, which is where 5M tokens is reached. The tokenizer text is fixed so the vocab does not change if more training text is read later.
+  - Validation pieces the tokenizer never saw are encoded with the learned merges, the way a prompt would be.
+
+### `tools/pretokenize.c`
+
+- **Purpose:** splits text into pieces and counts them in a hash table.
+- **Used by:** `prep_data.c`, `bpe_train.c` (`Piece`, `PieceTable`).
+
+| Function | What it does |
+|---|---|
+| `piece_length(p)` | length of the piece starting at `p`: a word (letters), number (digits) or single punctuation mark, each with an optional single leading space; `'\n'` is its own piece; a lone space is a piece |
+| `piece_table_init(t, capacity)` | empty table; capacity is a power of 2 |
+| `piece_table_find(t, s, len)` | slot holding this piece, or the empty slot where it would go (FNV-1a hash, linear probing) |
+| `piece_table_count(t, text, len)` | splits the text and adds one to each piece's count, doubling the table before it passes half full |
+| `piece_table_free(t)` | frees the slots and each piece's ids |
+
+- **Details that matter:**
+  - A `Piece` points into the original text buffer instead of copying it, so the buffer must outlive the table.
+  - The pieces glue back into the original text, which is what lets BPE run piece by piece.
+  - `Piece.ids` and `n_ids` belong to `bpe_train`: after training they hold the piece's final encoding.
+
+### `tools/bpe_train.c`
+
+- **Purpose:** learns the BPE merges and encodes a piece with them.
+- **Used by:** `prep_data.c`.
+
+| Function | What it does |
+|---|---|
+| `bpe_char_id(c)` | `'\n'` = 1, `' '` to `'~'` = 2-96, else -1 |
+| `bpe_train(bpe, pieces, vocab_size)` | per step: count all pairs inside pieces (weighted by piece count), merge the top pair in every piece, record it as the next id |
+| `bpe_encode(bpe, s, len, out)` | one id per character, then repeatedly merge the pair with the lowest merged id |
+| `bpe_free(bpe)` | frees the tokens and the merge table |
+
+- **Details that matter:**
+  - Ties between equally common pairs go to the smaller `(left, right)`, so every machine learns the same vocab.
+  - Pairs are recounted from scratch each step. That is simple and fast enough (about 3 s) because there are only ~16K distinct pieces.
+  - `PairTable` is reused for two jobs: pair counts while training, then `(left, right)` to merged id for `bpe_encode`.
+  - `bpe_encode` gives the same ids as the training-time encoding; this was checked on every training piece.
 
 ## Verification
 

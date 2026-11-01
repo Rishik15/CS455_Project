@@ -7,7 +7,7 @@ Decoder-only transformer, GPT-2 style. Everything below is what `serial` impleme
 - TinyStories, filtered to stories with only printable ASCII (32-126) plus `'\n'`.
 - BPE, 4096-token vocab: id 0 = end-of-story, ids 1-96 = base characters, the rest = learned merges. No unknown token, since every character has an id.
 - Text is split into pieces first (a word with its leading space, a number, one punctuation mark, `'\n'`). Merges never cross a piece boundary.
-- About 5M training tokens in `train.bin` (uint16 ids), plus a held-out `val.bin`.
+- About 5M training tokens in `train.bin` (uint16 ids), plus the whole validation set, about 4.6M tokens, in `val.bin`. How the tokenizer is trained: [05-bpe.md](05-bpe.md).
 
 ## Config
 
