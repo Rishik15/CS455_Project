@@ -1,3 +1,4 @@
 data/*.txt
 data/*.bin
 build/
+.idea/
