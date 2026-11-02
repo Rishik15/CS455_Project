@@ -44,6 +44,26 @@ Order: headers, `src/`, `src/cpu/` in forward-pass order, then `tools/`.
   - `rng_uniform` takes the top 24 bits and adds half a step, so every value is exactly representable as a float and the result is never 0 or 1. This protects `log(u1)` in Box-Muller from `log(0)`.
   - `time_seconds` and `clock_gettime` need `#define _POSIX_C_SOURCE 199309L` at the top of `utils.c`, because `-std=c99` hides POSIX functions otherwise.
 
+### `include/dataloader.h` and `src/dataloader.c`
+
+- **Purpose:** serves batches of `inputs` and `targets` from a `.bin` file of uint16 token ids (`train.bin` or `val.bin`).
+- **Used by:** the training loops. `inputs` and `targets` go straight into `gpt_forward`.
+- **Struct `DataLoader`:** `tokens` (the whole file in memory), `num_tokens`, `start` and `end` (the part of the file this loader reads), `pos` (where the next batch starts), `B`, `T`, and the `inputs` and `targets` buffers of `B*T` ints.
+- **Functions:**
+
+| Function | What it does | Notes |
+|---|---|---|
+| `dataloader_init(dl, path, B, T)` | reads the whole file into `tokens`, allocates `inputs` and `targets` | exits if the file can't be read or holds fewer than `B*T + 1` tokens |
+| `dataloader_next(dl)` | fills `inputs` with the next `B*T` tokens and `targets` with the same tokens shifted by one, then moves `pos` forward by `B*T` | wraps to `start` when fewer than `B*T + 1` tokens are left |
+| `dataloader_reset(dl)` | moves `pos` back to `start` | so validation sees the same batches every time |
+| `dataloader_free(dl)` | frees `tokens`, `inputs` and `targets` | |
+
+- **Details that matter:**
+  - Batches are consecutive, non-overlapping chunks of the file, in order, with no shuffling. Every version reads the same batches in the same order.
+  - Row `b` of a batch is tokens `pos + b*T` to `pos + b*T + T - 1`; its targets are the same positions plus one. The `+1` is why a batch needs `B*T + 1` tokens.
+  - With `B = 32`, `T = 256` and the current `train.bin` (5,000,319 tokens), one pass is 610 batches; the last 3,199 tokens don't fill a batch and are skipped.
+  - `start` and `end` are always the whole file for now. MPI needs a way to set them per rank (see [04-remaining.md](04-remaining.md)).
+
 ### `include/model.h`
 
 - **Purpose:** the `GPT` object and its API.
@@ -390,5 +410,6 @@ Results from running the code during development:
 | initial loss on random tokens | about 8.38, close to ln(4096) = 8.32 |
 | gradient descent on one tiny batch | loss 3.0 to 0.32 in 60 steps |
 | one forward+backward over 256 tokens | about 0.8 s, single-threaded, `-O2` |
+| dataloader over `train.bin`, `B = 32`, `T = 256` | 610 batches per pass; every input matches the file and every target is the next token, including the wrap back to the start |
 
 `tests/test_ops.c` is still empty; the repeatable version of these checks goes there.

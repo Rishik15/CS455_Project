@@ -27,7 +27,7 @@ Only the low-level math changes between the four versions. The model wiring, dat
 │   ├── ops.h                 forward/backward prototypes for every op
 │   ├── utils.h               xmalloc/xcalloc, rng, timer
 │   ├── tokenizer.h           (empty) load vocab.bin, decode ids to text
-│   ├── dataloader.h          (empty) batches from train.bin / val.bin
+│   ├── dataloader.h          batches from train.bin / val.bin
 │   └── optimizer.h           (empty) AdamW
 ├── tools/                    offline data prep, run once
 │   ├── prep_data.c           main: read, split, filter, train BPE, encode, write .bin files
@@ -37,7 +37,7 @@ Only the low-level math changes between the four versions. The model wiring, dat
 │   ├── model.c               buffers, init, wires ops into forward/backward
 │   ├── utils.c
 │   ├── tokenizer.c           (empty)
-│   ├── dataloader.c          (empty)
+│   ├── dataloader.c          serial done; per-rank slice for MPI still to do
 │   ├── optimizer.c           (empty)
 │   ├── cpu/                  serial implementation of ops.h, one file per op
 │   │   └── encoder.c matmul.c attention.c layernorm.c gelu.c residual.c crossentropy.c
@@ -129,7 +129,7 @@ TinyStories-train.txt
 ## One training step
 
 ```
-dataloader_next                                  (planned)
+dataloader_next                                  src/dataloader.c
 gpt_forward                                      src/model.c
   encoder_forward
   block_forward, per layer
