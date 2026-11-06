@@ -13,7 +13,8 @@ void dataloader_init(DataLoader *dl, const char* path, int B, int T) {
     long filesize = ftell(f);
     fseek(f, 0, SEEK_SET);
     dl->num_tokens = filesize/2;
-    if (dl->num_tokens < B*T+1) {
+    size_t expected = B * T + 1;
+    if (dl->num_tokens < expected) {
         fprintf(stderr, "Not enough tokens read for \nbatch size: %d\ntoken per batch: %d\n", B, T);
         exit(1);
     }

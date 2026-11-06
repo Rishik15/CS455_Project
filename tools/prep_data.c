@@ -24,15 +24,24 @@
 #include "pretokenize.h"
 #include "utils.h"
 
+
 #define TRAIN_TEXT "data/TinyStories-train.txt"
 #define VAL_TEXT "data/TinyStories-valid.txt"
 #define TRAIN_FILE "data/train.bin"
 #define VAL_FILE "data/val.bin"
 #define VOCAB_FILE "data/vocab.bin"
 #define MERGES_FILE "data/merges.bin"
-#define TRAIN_READ_BYTES (25L * 1024 * 1024)
-#define TOKENIZER_CHARS 20000000L
-#define TARGET_TOKENS 5000000L
+
+/*	These macros are redfined for testing
+	#define TRAIN_READ_BYTES (25L * 1024 * 1024)
+	#define TOKENIZER_CHARS 20000000L
+	#define TARGET_TOKENS 5000000L 
+*/
+
+#define TRAIN_READ_BYTES (2L * 1024 * 1024)
+#define TOKENIZER_CHARS 500000L
+#define TARGET_TOKENS 10000L
+
 #define VOCAB_SIZE 4096
 #define CHUNK_TOKENS (1 << 20)
 #define SEP "<|endoftext|>"

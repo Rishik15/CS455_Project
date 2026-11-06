@@ -9,13 +9,13 @@
 #include "optimizer.h"
 #include "dataloader.h"
 
-#define DATA_PATH "data/test.bin"
+#define DATA_PATH "data/train.bin"
 
 int main(){
 
 	const int B = 2;
 	const int T = 8;
-	const int num_steps = 10;
+	const int num_steps = 5;
 	const float learning_rate = 0.001f;
 	const uint64_t seed = 0xbad;
 	const float weight_decay = 0.01f;
@@ -24,15 +24,7 @@ int main(){
 	//GPT	
 	//	config 
 	
-	GPTConfig config = {
-		.vocab_size = 64,
-        	.max_seq_len = 8,
-        	.n_layers = 2,
-        	.n_heads = 2,
-        	.channels = 32	
-	};
-
-	//GPTConfig default_config = gpt_config_default();
+	GPTConfig config = gpt_config_default();
 	
 	//	init
 	GPT model = {0};
