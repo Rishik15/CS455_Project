@@ -4,8 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <time.h>
 
 #include "checkpoint.h"
 #include "config.h"
@@ -13,9 +14,6 @@
 #include "model.h"
 #include "optimizer.h"
 #include "utils.h"
-
-#define RUN_DIR "checkpoints/serial-trial"
-#define CHECKPOINT_PATH RUN_DIR "/model.bin"
 
 static int make_directory(const char *path) {
     if (mkdir(path, 0755) == 0) return 0;
@@ -42,24 +40,35 @@ static int copy_file(const char *source, const char *destination) {
 
 int main(void) {
     const int B = 32, T = 256;
-    const double training_seconds = 20.0;
+    const double training_seconds = 30.0 * 60.0;
     const float learning_rate = 0.001f;
     const uint64_t seed = 0xbad;
     const float weight_decay = 0.01f, epsilon = 1e-8f;
     int status = EXIT_FAILURE;
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    if (access(CHECKPOINT_PATH, F_OK) == 0) {
-        fprintf(stderr, "%s already exists; move the run directory before another trial.\n",
-                CHECKPOINT_PATH);
+    time_t started_at = time(NULL);
+    struct tm local_start;
+    char run_dir[128], checkpoint_path[160], vocab_path[160], merges_path[160];
+    if (started_at == (time_t)-1 || !localtime_r(&started_at, &local_start) ||
+        !strftime(run_dir, sizeof(run_dir),
+                  "checkpoints/serial-%Y%m%d-%H%M%S-XXXXXX", &local_start)) {
+        fprintf(stderr, "Could not determine the run start time.\n");
         return EXIT_FAILURE;
     }
-    if (make_directory("checkpoints") || make_directory(RUN_DIR) ||
-        copy_file("data/vocab.bin", RUN_DIR "/vocab.bin") ||
-        copy_file("data/merges.bin", RUN_DIR "/merges.bin")) {
-        fprintf(stderr, "Could not prepare %s and its tokenizer files.\n", RUN_DIR);
+    if (make_directory("checkpoints") || !mkdtemp(run_dir)) {
+        fprintf(stderr, "Could not create run directory: %s\n", strerror(errno));
         return EXIT_FAILURE;
     }
+    snprintf(checkpoint_path, sizeof(checkpoint_path), "%s/model.bin", run_dir);
+    snprintf(vocab_path, sizeof(vocab_path), "%s/vocab.bin", run_dir);
+    snprintf(merges_path, sizeof(merges_path), "%s/merges.bin", run_dir);
+    if (copy_file("data/vocab.bin", vocab_path) ||
+        copy_file("data/merges.bin", merges_path)) {
+        fprintf(stderr, "Could not prepare %s and its tokenizer files.\n", run_dir);
+        return EXIT_FAILURE;
+    }
+    printf("Run directory: %s\n", run_dir);
 
     GPT model = {0};
     gpt_build(&model, gpt_config_default(), B, T, seed);
@@ -95,8 +104,8 @@ int main(void) {
             goto cleanup;
         }
     }
-    if (checkpoint_save(CHECKPOINT_PATH, &model)) goto cleanup;
-    printf("Saved weights: %s\n", CHECKPOINT_PATH);
+    if (checkpoint_save(checkpoint_path, &model)) goto cleanup;
+    printf("Saved weights: %s\n", checkpoint_path);
     printf("Completed %d steps in %.3fs (%.1f tokens/s). Final batch loss: %.6f\n",
            steps, elapsed, (double)steps * B * T / elapsed, loss);
     status = EXIT_SUCCESS;
