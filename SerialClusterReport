@@ -1,0 +1,487 @@
+# Repository Reconnaissance: MPI/CUDA Model Training Project
+
+Audit snapshot: October 30, 2026; branch `main`, HEAD `3fcdbb7`.
+
+## 1. Executive Summary
+
+**This repository is a partially implemented CPU model library, not yet a functional training system.** The serial CPU forward and backward passes exist, but the serial training entry point, optimizer, data loader, Makefile, and tests are empty. CUDA, MPI, and MPI+CUDA have only placeholder entry-point files.
+
+The intended workload is next-token prediction on TinyStories using a small GPT-style decoder-only transformer: six layers, four attention heads, 128 channels, context length 256, and vocabulary size 4096. It has **1,746,944 parameters**, learned positional embeddings, and tied input/output embeddings.
+
+Your serial responsibility is primarily to **complete the training infrastructure and validate the existing mathematics**, rather than write the transformer from scratch. The immediate blockers are missing data ingestion, parameter updates, executable orchestration, and a repeatable build/test process.
+
+Important risks:
+
+- Current data preparation counts word tokens but does **not** produce training files; documentation instead specifies future BPE tokenization.
+- Cross-entropy can report infinite loss through probability underflow.
+- Documentation claims gradient checks passed, but their test harness is absent.
+- CUDA integration requires changes to memory management, not merely alternate math functions.
+- MPI must preserve global-batch and gradient-normalization semantics.
+
+Audited branch: `main`, HEAD `3fcdbb7`; working tree was clean. Inspection was read-only. No compilation, tests, training, benchmarks, downloads, or repository modifications were performed during the audit. This report file was subsequently created at the user's request.
+
+## 2. Repository Architecture
+
+### Components and dependencies
+
+The project is handwritten C numerical code, with `.cu` placeholders for future CUDA implementations. No machine-learning framework, BLAS library, package manager, or dependency lockfile is present.
+
+| Component | Current contents | Role |
+|---|---|---|
+| `include/` | Model, configuration, operation, and utility interfaces; other headers empty | Shared contracts |
+| `src/model.c` | Model allocation, initialization, forward/backward orchestration | Shared model implementation |
+| `src/cpu/` | Seven operation implementations, each with forward/backward functions | Serial numerical backend |
+| `src/utils.c` | Allocation wrappers, RNG, monotonic timer | Shared utilities |
+| `src/cuda/` | `.gitkeep` only | Future GPU backend |
+| `train/` | Four empty source files | Future executable entry points |
+| `tools/` | Partial word-token preparation; empty BPE/pretokenization modules | Offline preprocessing |
+| `tests/` | Two empty test files | Future validation |
+| `sample/generate.c` | Empty | Future generation executable |
+| `data/` | `.gitkeep` only in this checkout | Future dataset artifacts |
+| `docs/` | Architecture, file walkthroughs, plans, and diagrams | Design documentation |
+| `Makefile` | Empty | No build targets implemented |
+
+The declared architectural intent is to share model wiring, data loading, and optimization, selecting CPU or CUDA operations at link time. This is a **design**, not an integrated build. See `docs/02-structure.md:67`.
+
+**Dependencies established by source:**
+
+- C standard library.
+- C math library: `expf`, `logf`, `sqrtf`, `tanhf`, and double-precision Box–Muller functions.
+- POSIX `clock_gettime(CLOCK_MONOTONIC)`.
+- A C99-capable compiler; documentation proposes GCC, `-Iinclude`, and `-lm`.
+- MPI and CUDA are future requirements; no versions, compiler configuration, or runtime integration are specified.
+
+The documented compilation command links an empty `train/train_serial.c`, so it cannot provide the required `main`. This is a source-level conclusion, not an observed compiler result. See `docs/02-structure.md:165`.
+
+The only implemented `main` is the preprocessing program at `tools/prep_data.c:92`.
+
+### Documentation and development instructions
+
+- `README.md:3`: project purpose and four execution modes.
+- `docs/01-model.md:1`: model specification and claimed sanity checks.
+- `docs/02-structure.md:157`: layout, coding conventions, and prospective compilation.
+- `docs/03-files.md:1`: detailed function walkthrough.
+- `docs/04-remaining.md:5`: remaining implementation plan.
+- `docs/model-walkthrough.md:199`: backward-pass explanation.
+- `docs/transformer_training_loop_md.md:24`: earlier optimizer/training checklist.
+
+No applicable `AGENTS.md` was found in the repository or inspected ancestor locations.
+
+The editor configuration contains another developer's absolute include path, rather than a portable repository-relative setting. See `.clangd:2`.
+
+### Training pipeline: implemented versus missing
+
+```text
+TinyStories text
+    ↓
+Partial preprocessing: split/filter/count words/build in-memory vocabulary
+    ↓ MISSING: encode and write dataset files
+train.bin / val.bin / vocab.bin
+    ↓ MISSING: loader, batch construction, target shifting
+inputs and targets: int[B*T]
+    ↓
+gpt_build → gpt_forward → gpt_zero_grad → gpt_backward
+    ↓ MISSING: optimizer update and repeated training loop
+Updated model
+    ↓ MISSING: validation orchestration, checkpointing, final report
+```
+
+The intended complete flow is documented at `docs/02-structure.md:116`. Only the central model computation currently exists.
+
+## 3. Model Specification
+
+### Architecture and tensor shapes
+
+Defaults come directly from `include/config.h:22`.
+
+| Quantity | Value |
+|---|---:|
+| Vocabulary `V` | 4096 |
+| Maximum context `Tm` | 256 |
+| Transformer layers `L` | 6 |
+| Attention heads `NH` | 4 |
+| Hidden channels `C` | 128 |
+| Head dimension `C/NH` | 32 |
+| MLP hidden dimension `4C` | 512 |
+| Parameters | 1,746,944 |
+
+The parameter-count formula derived from `param_sizes` is:
+
+```text
+V*C + Tm*C + L*(12*C*C + 13*C) + 2*C
+```
+
+See `src/model.c:57`.
+
+This is a **GPT-2-style sequential pre-LayerNorm transformer**. The reference to “Pythia-14M shape” describes selected dimensions; this implementation is not a 14-million-parameter Pythia model. The documentation explicitly distinguishes the architectures at `docs/01-model.md:126`.
+
+Inputs are integer token IDs `[B,T]`. Outputs are logits `[B,T,V]`, with probabilities and per-token losses produced when targets are supplied. Hidden activations use row-major `[B,T,C]`; linear weights use `[C_out,C_in]`. See `include/ops.h:3`.
+
+For token position `t`:
+
+```text
+x_t = W_token[id_t] + W_position[t]
+```
+
+Each block computes:
+
+```text
+u = x + AttProj(Attention(QKV(LN1(x))))
+y = u + FCProj(GELU(FC(LN2(u))))
+```
+
+After all blocks:
+
+```text
+z = LNf(y) @ W_token^T
+```
+
+There is no separate output weight matrix or output bias. There is no implemented dropout, rotary positional embedding, padding mask, or story-boundary attention mask. The actual block wiring is at `src/model.c:298`.
+
+### Attention, normalization, and activation
+
+Attention uses:
+
+```text
+a[t,j] = softmax over j <= t of (dot(q_t, k_j) / sqrt(C/NH))
+o_t = sum over j <= t of a[t,j] * v_j
+```
+
+Future positions receive zero probability. QKV is packed `[B,T,3C]` as `[Q | K | V]`; attention probabilities are `[B,NH,T,T]`. See `src/cpu/attention.c:33`.
+
+LayerNorm uses population variance over channels and epsilon `1e-5`. See `src/cpu/layernorm.c:12`.
+
+GELU uses the tanh approximation:
+
+```text
+GELU(x) = 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))
+```
+
+See `src/cpu/gelu.c:18`.
+
+### Loss and gradient normalization
+
+For supplied next-token targets:
+
+```text
+loss = -sum_i log(p[i, target[i]]) / (B*T)
+dlogits[i,v] = (p[i,v] - indicator(v == target[i])) / (B*T)
+```
+
+Every position contributes equally. There is no ignore index or masked-token denominator. Targets are accepted as supplied; the model does **not** shift inputs itself.
+
+See `src/cpu/crossentropy.c:22` and `src/cpu/crossentropy.c:54`.
+
+### Initialization and reproducibility
+
+`init_params` implements:
+
+- Token embeddings, positional embeddings, QKV, and MLP expansion weights: normal distribution with standard deviation `0.02`.
+- Attention and MLP residual projections: standard deviation `0.02 / sqrt(2L)`.
+- LayerNorm scales: one.
+- Biases: zero from zero-initialized allocation.
+
+See `src/model.c:181`.
+
+The seed is passed explicitly to `gpt_build`. The RNG is global-state xorshift64*, with Box–Muller normal sampling. Seed zero maps to a fixed nonzero constant. This supports repeatable initialization in a fixed environment, but floating-point math libraries and compiler behavior prevent asserting universal bitwise equivalence. See `src/utils.c:51`.
+
+### Dataset: present behavior versus planned format
+
+**Implemented preprocessing:**
+
+- Reads up to 25 MiB from `data/TinyStories-train.txt`.
+- Splits on `<|endoftext|>`.
+- Trims leading/trailing whitespace.
+- Keeps printable ASCII plus newline.
+- Tokenizes words, numbers, punctuation, spaces, and newlines.
+- Counts enough whole stories to reach approximately five million tokens.
+- Assigns frequent-word IDs, reserving `0` for EOS and `1` for unknown.
+- Prints statistics and frees everything.
+
+It does **not** encode the corpus or write binary files. See `tools/prep_data.c:20`, `tools/prep_data.c:123`, and `tools/prep_data.c:226`.
+
+**Planned format:** BPE vocabulary of 4096 entries, EOS `0`, base characters `1–96`, learned merges, no unknown token, `uint16` training/validation token streams. See `docs/01-model.md:5`.
+
+The binary header, byte order, vocabulary serialization, split policy, and loader ownership contract are unspecified.
+
+### Training controls
+
+| Setting | Actual status |
+|---|---|
+| Optimizer | AdamW planned; no implementation or API |
+| Learning rate | Unspecified |
+| Adam betas / epsilon / weight decay | Unspecified |
+| Batch size | API argument, no training default |
+| Epochs / total steps | Unspecified |
+| LR schedule / clipping | Mentioned as optional |
+| Data order / shuffling | Unimplemented |
+| Convergence / early stopping | Unimplemented |
+| Validation frequency | Unspecified |
+
+Consequently, mathematical equivalence between four **training algorithms** cannot yet be assessed: only one model-computation backend exists.
+
+## 4. Serial Training Audit
+
+### Public model API and ownership
+
+`GPT` owns four contiguous float buffers—parameters, parameter gradients, activations, and activation gradients—and separate copied input/target buffers. Named tensor pointers are views; they must not be freed individually. See `include/model.h:83`.
+
+| Function | Inputs, outputs, dependencies, and status |
+|---|---|
+| `gpt_config_default()` | Returns the default `GPTConfig` by value. Implemented; contains model dimensions only. `include/config.h:22` |
+| `gpt_build(model, config, max_batch, max_seq, seed)` | Validates dimensions, allocates owned buffers, maps tensor views, and initializes parameters. Depends on allocation/sizing/RNG helpers. Returns through `model`; failures exit. Rebuilding an already allocated object without freeing it would leak its old buffers because the struct is overwritten. `src/model.c:202` |
+| `gpt_forward(model, inputs, targets, B, T)` | Validates shape and token ranges, copies tokens, runs all forward operations. Returns mean loss with targets, otherwise `-1`. Saves state needed by backward. In inference mode it produces logits but does not refresh `probs`. `src/model.c:322` |
+| `gpt_zero_grad(model)` | Clears the parameter-gradient buffer only. Required before each independent optimizer step. `src/model.c:359` |
+| `gpt_backward(model)` | Requires a preceding target-bearing forward call. Clears activation gradients, reverses the computation graph, and accumulates parameter gradients. Tied embedding gradients receive both output-projection and input-embedding contributions. No parameter update occurs. `src/model.c:399` |
+| `gpt_print_summary(model)` | Prints dimensions and parameter/activation memory estimates. Does not report training quality or elapsed time. Its memory estimate excludes token buffers and future optimizer state. `src/model.c:426` |
+| `gpt_free(model)` | Frees all six owned buffers and zeroes the struct. Requires an initialized or otherwise valid zeroed object. `src/model.c:442` |
+
+Only the latest forward state is retained. Validation must not overwrite that state between a training forward and its backward pass.
+
+### Model internals
+
+| Functions | Responsibilities and review findings |
+|---|---|
+| `fatal`, `check_config`, `check_tokens` | Fail-fast diagnostics; enforce positive usable dimensions, divisibility of channels by heads, capacity limits, and valid IDs. They do not validate arbitrary pointers or arithmetic overflow. `src/model.c:32`, `src/model.c:283` |
+| `param_sizes`, `act_sizes` | Write counts for 16 parameter tensors and 22 activation tensors. Use `size_t` for much of the arithmetic, but do not check multiplication overflow. `src/model.c:57`, `src/model.c:82` |
+| `param_list`, `act_list` | Enumerate pointer fields in the same order as the size arrays. Correctness depends on keeping these lists synchronized with the structs. `src/model.c:113` |
+| `alloc_tensors` | Sums sizes, allocates a zeroed buffer, assigns non-owning views, and returns the owning pointer and total count. Sum overflow is unchecked. `src/model.c:139` |
+| `fill_normal`, `fill_value`, `init_params` | Initialize caller-provided parameter slices; allocate nothing. Initialization rules are consistent with the stated architecture. `src/model.c:159` |
+| `layer_params` | Returns layer-specific parameter/gradient views using fixed model dimensions. `src/model.c:235` |
+| `layer_acts` | Returns layer-specific activation views using the **current** `B,T`, within tensor regions allocated at maximum capacity. A backend must reproduce these current-shape strides. `src/model.c:258` |
+| `block_forward` | Calls normalization, linear, attention, GELU, and residual operations in the sequential pre-LN order. `src/model.c:298` |
+| `block_backward` | Reverses both branches and adds their gradients into skip-path gradients. The source contains the expected residual-gradient accumulation paths; numerical validation remains necessary. `src/model.c:369` |
+
+### CPU operation functions
+
+All operations use caller-owned arrays, allocate no memory, and retain no private state. Backward functions accumulate with `+=`. Shape validation is generally delegated to the model wrapper.
+
+| Functions | Mathematics, inputs/outputs, and concerns |
+|---|---|
+| `encoder_forward`, `encoder_backward` | Forward gathers token/position rows and sums them into `[B,T,C]`. Backward scatters `dout` into both embedding tables, accumulating repeated token IDs. Called by top-level model passes. Token validation occurs in `gpt_forward`, not here. The expression `tokens[b*T+t]` uses signed-int multiplication, creating an overflow risk for extreme dimensions. `src/cpu/encoder.c:18`, `src/cpu/encoder.c:42` |
+| `matmul_forward`, `matmul_backward` | `Y = X @ W^T + b`; backward computes `dX = dY @ W`, `dW = dY^T @ X`, and summed bias gradients. Bias and bias-gradient pointers may be null. Used throughout blocks and for the tied output projection. Straight nested loops; no external acceleration. `src/cpu/matmul.c:18`, `src/cpu/matmul.c:48` |
+| `layernorm_forward`, `layernorm_backward` | Forward saves channel mean and reciprocal standard deviation. Backward computes scale/shift gradients and `dx = rstd*(dn - mean(dn) - normalized_x*mean(dn*normalized_x))`. Requires saved input/statistics and weights. Float reductions may lose precision at extreme scales. `src/cpu/layernorm.c:23`, `src/cpu/layernorm.c:59` |
+| `attention_forward`, `attention_backward` | Operate on packed QKV and saved attention probabilities. Backward sends gradients through values, softmax, queries, and keys. Uses causal bounds and `1/sqrt(head_size)`. Direct calls require valid `NH` and divisibility. `src/cpu/attention.c:68`, `src/cpu/attention.c:122` |
+| `dot`, `attention_row_forward`, `attention_row_backward` | Internal attention helpers. `dot` performs float accumulation. Row-forward subtracts the maximum before exponentiation. Row-backward computes `dS_j = a_j*(dA_j - sum_k a_k*dA_k)`, then Q/K/V gradients. Repeated writes are safe in the serial implementation; GPU parallelization needs an explicit reduction strategy. `src/cpu/attention.c:20`, `src/cpu/attention.c:33`, `src/cpu/attention.c:93` |
+| `gelu_forward`, `gelu_backward` | Elementwise tanh approximation and its analytic derivative. Backward requires pre-GELU input. Very large values can overflow cubic intermediates; no nonfinite detection exists. `src/cpu/gelu.c:18`, `src/cpu/gelu.c:32` |
+| `residual_forward`, `residual_backward` | Elementwise sum; backward adds incoming gradient to both branches. Model use preserves separate activation buffers required elsewhere in backward. `src/cpu/residual.c:15`, `src/cpu/residual.c:27` |
+| `crossentropy_forward`, `crossentropy_backward` | Forward writes probabilities and losses and returns their mean. Backward adds the mean-normalized softmax gradient. Maximum subtraction prevents exponential overflow for finite logits, but does not prevent the target probability from underflowing to zero. `src/cpu/crossentropy.c:22`, `src/cpu/crossentropy.c:54` |
+
+### Utility and preprocessing functions
+
+- `xmalloc` and `xcalloc` return owning allocations or exit with a diagnostic. They do not protect size calculations performed by callers. `src/utils.c:23`
+- `rng_seed`, internal `rng_next`, `rng_uniform`, and `rng_normal` implement globally shared random state and Gaussian sampling. They are not independent per-model RNG objects. `src/utils.c:51`
+- `time_seconds` returns monotonic wall time, but ignores `clock_gettime` failure and is not used by any training loop. `src/utils.c:90`
+- `token_length` identifies the next text piece; `hash` and `find_slot` implement FNV-1a/open-addressed lookup; `compare_entries` sorts by frequency with deterministic lexical ties. `Entry` strings borrow storage from the input buffer. `tools/prep_data.c:43`
+- Preprocessing `main` owns the text buffer, story arrays, hash table, and sorted-pointer array. Normal completion frees them; several error exits rely on process termination for cleanup. It emits statistics only.
+
+### Concrete correctness concerns
+
+**1. Cross-entropy underflow — substantive numerical defect.**
+
+`-logf(p[target])` can become infinity for finite logits if the target probability underflows. Compute the loss directly as:
+
+```text
+(max(z) - z[target]) + log(sum_v exp(z[v] - max(z)))
+```
+
+while retaining probabilities for backward. Relevant statement: `src/cpu/crossentropy.c:42`.
+
+**2. RNG endpoint guarantee is too strong.**
+
+On ordinary binary32 arithmetic, the maximum 24-bit integer plus `0.5f` can round to `16777216`, yielding `1.0f`. Thus `rng_uniform` is not reliably strictly below one as documented. This does not introduce `log(0)` by itself, but the contract should be corrected and tested. `src/utils.c:67`
+
+**3. Configurable sizes need checked arithmetic.**
+
+Allocation products/sums and expressions such as `3*C`, `4*C`, and `b*T` are not comprehensively overflow-checked. Default dimensions are small; unrestricted future CLI dimensions would expose the issue.
+
+**4. Preprocessing has malformed/small-input edge cases.**
+
+- Printing ten entries unconditionally can access beyond `sorted` when fewer than ten distinct tokens exist. `tools/prep_data.c:241`
+- An initial separator at the beginning of the input causes `story_end-1` to form a pointer before the allocation. `tools/prep_data.c:127`
+- `fread` errors are not separately checked.
+- Data after the last complete separator is ignored.
+- Counting completes whole stories, so five million is a threshold rather than an exact token limit.
+
+### Serial capability assessment
+
+| Capability | Assessment |
+|---|---|
+| Complete model forward/backward source | Yes; unverified by executable tests in this audit |
+| Parameter updates | No |
+| Multiple epochs | No training loop |
+| Configurable dimensions | Model API supports them; no CLI |
+| Loss | Computed and returned; no training logger |
+| Accuracy / perplexity | Not implemented |
+| Deterministic execution | Seedable initialization; full-run reproducibility absent |
+| No MPI/CUDA dependency | Existing CPU model code has neither dependency |
+| Benchmark timing | Timer helper only |
+| Clean CPU executable build/run | Not established; training `main` and Makefile are missing |
+
+No explicit TODO markers are needed to identify the unfinished work: most missing modules are zero-byte files.
+
+## 5. Parallel Integration
+
+### Current implementation status
+
+There are no implemented MPI calls, CUDA kernels, device transfers, rank partitioning, or GPU allocation routines. All parallel behavior below is documented intent.
+
+The intended MPI design is replicated-model data parallelism:
+
+1. Rank zero initializes parameters.
+2. `MPI_Bcast` distributes them.
+3. Each rank processes different training data.
+4. `MPI_Allreduce` sums gradients.
+5. Gradients are divided by world size.
+6. Every rank applies the same update.
+
+CUDA is intended to keep parameters, gradients, and activations on the device. MPI+CUDA is intended to use CUDA-aware MPI or host staging. See `docs/02-structure.md:146`.
+
+### Integration risks, in priority order
+
+| Risk | Consequence for your serial baseline |
+|---|---|
+| **Tokenization and data format undecided** | All versions must consume the same IDs, vocabulary, target alignment, split, and dataset subset. The model can remain tokenization-agnostic, but the loader interface must be agreed. |
+| **Local versus global mean gradients** | Current gradients already include `1/(B*T)`. Averaging rank gradients matches a serial global-batch mean only for equal local token counts. Unequal batches require token-count weighting. |
+| **Global-batch consistency** | Keeping local batch size fixed while increasing ranks increases global batch size and changes optimization. Same-step loss comparisons would not measure the same algorithm. |
+| **GPU memory ownership** | `gpt_build`, initialization, token validation, copies, gradient clearing, and freeing are host operations. Merely linking CUDA implementations of `ops.h` cannot establish device-resident training. |
+| **C/C++ linkage** | Headers lack `extern "C"` guards. Separately compiled C objects and CUDA C++ callers will need an explicit linkage policy. |
+| **Gradient accumulation contract** | GPU operations must preserve `+=`, repeated-token embedding sums, attention reductions, and the two contributions to tied `wte`. |
+| **Activation stride convention** | GPU code must use current `B,T` layer strides, matching `layer_acts`, rather than silently assuming maximum-capacity strides. |
+| **Optimizer policy missing** | AdamW hyperparameters, decay exclusions, clipping, and update order must match across implementations. |
+
+Host-only ownership is directly visible at `src/model.c:202`, `src/model.c:331`, and `src/model.c:408`. Public linkage declarations are at `include/model.h:113`.
+
+**Can serial serve as the reference?**
+
+It is the intended reference, but it is not yet a validated one. Establish operation gradients, full-model gradients, and one-step parameter-update checks first. Compare parallel loss, gradients, and updated parameters using the same global batch and initialization, with explicit floating-point tolerances.
+
+## 6. Progress Matrix
+
+| Implementation | Implemented and source-supported | Partial / planned | Current conclusion |
+|---|---|---|---|
+| Serial CPU | Model storage, initialization, seven forward/backward operation pairs, model orchestration, utility timer/RNG | Loader, AdamW, training entry point, validation, build, tests | Substantial model core; no functional trainer |
+| CUDA | Empty `train/train_cuda.cu`; backend directory placeholder | All kernels, device ownership, transfers, execution loop | Placeholder |
+| MPI | Empty `train/train_mpi.c` | Broadcast, sharding, gradient reduction, rank orchestration | Placeholder |
+| MPI+CUDA | Empty `train/train_mpi_cuda.cu` | GPU execution plus distributed synchronization | Placeholder |
+
+Shared preprocessing is partially implemented. Tokenizer, BPE, optimizer, loader, generation, and tests are empty. The repository's own remaining-work list confirms these gaps at `docs/04-remaining.md:5`.
+
+### Development history
+
+| Date | Commit | Evidence of progress |
+|---|---|---|
+| Oct 20 | `cdcb0fa`, `4bb04f4` | Initial preparation tool and data setup documentation |
+| Oct 22 | `0e3c7f8` | Earlier skeleton, Makefile, transformer scaffolding, and binary artifacts added |
+| Oct 25 | `c55e43c` | That skeleton and associated artifacts reverted |
+| Oct 25 | `de7a4c2` | Standalone embedding implementation added |
+| Oct 26 | `dbd2828` | Preparation changed to word counting and vocabulary construction |
+| Oct 29 | `a31d2e0`, `863c011` | Training-loop documentation added/refined |
+| Oct 30 | `3fcdbb7` | Current CPU model architecture, operations, documentation, and empty integration files added; old embedding files replaced |
+
+Earlier Makefile and dataset artifacts are **not evidence of current readiness**, because they were removed.
+
+Documentation reports finite-difference checks, tiny-batch loss reduction, and roughly 0.8 seconds for one forward/backward pass. These are **documented historical claims**, not independently established results: no repeatable tests, raw logs, or complete benchmark environment accompany them. The documentation itself acknowledges the empty test file at `docs/03-files.md:350`.
+
+## 7. Build and Evaluation Readiness
+
+### Course compliance
+
+| Requirement | Evidence-based assessment |
+|---|---|
+| Offline compilation using `make` | **Not satisfied:** Makefile empty |
+| Self-contained source directory | CPU model source present; complete training source absent |
+| Two or more machines | No implemented MPI executable or launch instructions |
+| Configurable process count | No executable to launch under MPI |
+| Configurable problem size | Model API supports dimensions; no CLI or dataset limit |
+| Four configurations | Only CPU model backend implemented |
+| Comparable timing | No benchmark loop or synchronization policy |
+| Comparable training quality | Mean loss primitive exists; validation pipeline absent |
+| Reproducible command examples | One incomplete prospective GCC command; no working training examples |
+| Live compilation/execution demonstration | Not ready from this checkout |
+| Offline dataset availability | Local `data/` contains only `.gitkeep` |
+
+Dataset files are ignored by Git, which is reasonable, but the demonstration still needs pre-provisioned artifacts and a documented format. See `.gitignore:1`.
+
+### Supported comparison dimensions
+
+- **Dataset sizes:** no configurable loader or token-count limit.
+- **Model sizes:** configurable through `GPTConfig` at the API level, subject to validation and memory limits.
+- **MPI process counts:** unimplemented.
+- **CPU versus GPU:** unavailable.
+- **Single-host versus multi-host:** unavailable.
+
+### Benchmarking concerns to resolve
+
+1. **Time equivalent work.** Record global tokens per update, update count, model shape, and exact dataset subset.
+2. **Define the timing boundary.** Separate preprocessing/build/allocation from steady-state training. Include optimizer updates in training-step timing.
+3. **Report quality with speed.** Use the same held-out tokens and report token-weighted validation loss; perplexity is an optional derived metric.
+4. **Synchronize future GPU timing.** Host timers around asynchronous launches alone will undercount work. Use completed-device timing and explicit end-to-end measurements.
+5. **Measure distributed completion.** Align timed regions and report the slowest-rank elapsed time; separately account for communication.
+6. **Control short-run overhead.** Initialization, logging, validation, and checkpointing can dominate a brief demonstration unless measured separately.
+7. **Account for capacity-dependent clearing.** `gpt_backward` clears the entire maximum-size activation-gradient allocation, even when current `B,T` are smaller. This can distort comparisons if allocation capacities differ. `src/model.c:408`
+8. **Treat documentation timing as provisional.** The reported 0.8-second figure lacks sufficient hardware and measurement detail for a benchmark baseline.
+
+These are requirements for the forthcoming benchmark implementation; no existing GPU timing code was found to diagnose.
+
+## 8. Prioritized Action Plan
+
+The smallest practical path preserves `GPT`, `ops.h`, and the existing block wiring.
+
+| Order / priority | Issue and relevant files | Proposed correction | Teammate dependency |
+|---|---|---|---|
+| **1 — P0** | No repeatable correctness evidence; empty `tests/test_ops.c` and `Makefile` | Add an offline CPU test target. Check each backward operation and sampled parameters from all 16 tensor groups with finite differences. Include repeated token IDs, causal masking, multiple layers/heads, and smaller-than-capacity shapes. | No parallel implementation required; publish reference cases |
+| **2 — P0** | Underflow-prone loss in `src/cpu/crossentropy.c` | Compute cross-entropy through log-sum-exp; test extreme finite logits and agreement with the existing gradient formula. | GPU loss must use equivalent semantics |
+| **3 — P1** | Dataset contract absent; word/BPE mismatch in `tools/`, empty `include/dataloader.h` | Agree token width/endianness, metadata, EOS policy, target shifting, validation split, and batch ownership. Preserve the model's `const int*` interface. | Coordinate with data-preparation and MPI owners |
+| **4 — P0** | No batch ingestion in `src/dataloader.c` | Implement bounded token-file reading and conversion to `int[B*T]`, using enough source tokens for shifted targets. Validate file lengths/IDs; define EOF, reset, and incomplete-batch behavior. | Requires agreed format; final BPE implementation can proceed separately |
+| **5 — P0** | Empty `src/optimizer.c` / `include/optimizer.h` | Implement planned AdamW over flat parameter/gradient buffers, with owned moments, explicit step count, bias correction, and agreed decay policy. Test an update against a small hand-computable case. | Share exact update semantics with all teammates |
+| **6 — P0** | Empty `train/train_serial.c` | Add CLI parsing, build/load, repeated batch → forward → zero-grad → backward → update, bounded stopping, error reporting, and cleanup. Support epochs or steps explicitly. | Agree common option names; no need to wait for CUDA/MPI |
+| **7 — P0** | Incomplete build and no integration validation | Add a serial target requiring only C/POSIX/math libraries. After implementation, validate finite gradients, actual parameter changes, deterministic reruns, and tiny-fixture learning. | None; these become acceptance checks for parallel work |
+| **8 — P1** | No quality or timing reporting | Add training/validation loss, token counts, steady-state wall time, and tokens/second. Keep validation outside forward/backward pairs and use token-weighted aggregation. | Agree metrics and timing boundaries across modes |
+| **9 — P1** | MPI normalization and GPU ownership unresolved | Document equal-global-batch comparisons, weighted reductions for unequal shards, shared layout, C/C++ linkage, and host/device responsibilities. | Requires MPI/CUDA owners; avoid premature model rewrites |
+| **10 — P1** | Size safety and reproducibility gaps in `src/model.c`, `src/utils.c`, and prep tool | Add checked dimension/allocation arithmetic, fix the RNG endpoint contract, bound top-token reporting, and handle empty/malformed preprocessing input. | Share limits and initialization policy |
+| **11 — P1** | No reproducible demonstration instructions | Document actual Make targets, artifact provisioning, small CPU example, expected output fields, and later cluster launch commands. Replace stale editor path. | Cluster/toolchain details from teammates or instructor |
+| **12 — P2** | Optional persistence and usability | Add checkpoint/resume, generation, token accuracy, scheduling, clipping, and performance tuning after the baseline is validated. | Coordinate checkpoint format if shared |
+
+A full tokenizer decoder and text generator are **not prerequisites for training on already prepared token IDs**. A tiny deterministic token fixture can unblock tests and trainer development while BPE work continues.
+
+## 9. Unresolved Questions
+
+1. Is BPE now the agreed dataset format, or must the serial milestone initially support the existing word-token design?
+2. Who owns production of `train.bin`, `val.bin`, and `vocab.bin`, and what binary schema will they use?
+3. What AdamW learning rate, betas, epsilon, decay exclusions, schedule, batch size, and training budget are required?
+4. Should sequences cross story boundaries, and should EOS or padding affect the loss denominator?
+5. Must comparisons hold global batch size fixed, or does the course require weak-scaling experiments as well?
+6. What CPU/GPU hardware, MPI implementation, CUDA version, shared storage, and launcher are available for the demonstration?
+7. Is CUDA-aware MPI available?
+8. Are the claimed gradient-check harness and benchmark logs available elsewhere?
+9. What minimum validation quality and maximum demonstration runtime constitute acceptance?
+10. Are checkpointing and text generation required deliverables or optional demonstrations?
+
+## Handoff Context for ChatGPT
+
+Repository: `/home/zayas/NJIT/CS455_Project`; audited `main` at `3fcdbb7`, clean working tree at inspection time.
+
+The project trains a TinyStories next-token transformer in four intended modes. **Only CPU model computation exists.** No files were changed and no builds or jobs were run during the audit. This report was subsequently saved at the user's request.
+
+Relevant paths and interfaces:
+
+- `include/config.h`: `GPTConfig {vocab_size,max_seq_len,n_layers,n_heads,channels}`, defaults `{4096,256,6,4,128}`.
+- `include/model.h`, `src/model.c`:
+  - `gpt_build(GPT*, GPTConfig, int max_batch, int max_seq, uint64_t seed)`
+  - `gpt_forward(GPT*, const int* inputs, const int* targets, int B, int T)`
+  - `gpt_zero_grad(GPT*)`
+  - `gpt_backward(GPT*)`
+  - `gpt_print_summary(const GPT*)`
+  - `gpt_free(GPT*)`
+- `include/ops.h`, `src/cpu/*.c`: all seven forward/backward pairs implemented. Activations `[B,T,C]`, weights `[C_out,C_in]`, backward accumulation uses `+=`.
+- Model has 1,746,944 parameters, sequential pre-LN blocks, causal attention, learned positions, tanh GELU, and tied token/output embeddings.
+- `params_memory` and `grads_memory` are matching contiguous float buffers. Loss/gradients are averaged over current `B*T`.
+- `train/train_serial.c`, optimizer, loader, tokenizer, tests, and Makefile are empty.
+- All parallel entry points are empty; `src/cuda/` has no kernels.
+- `tools/prep_data.c` counts word tokens only; it writes no datasets. Documentation plans BPE and `uint16` streams. Local data is absent.
+- `src/cpu/crossentropy.c:42` needs stable log-sum-exp loss.
+- Existing gradient-check claims are documentation only; no reproducible harness is checked in.
+- GPU integration needs explicit memory ownership; MPI averaging needs matched global-batch semantics.
+
+**Recommended next task:** after receiving implementation authorization, add a minimal offline CPU test target and finite-difference/reference checks for the existing model, including a cross-entropy underflow regression. Then implement the shared token loader, AdamW, and serial training loop without rewriting the model architecture.

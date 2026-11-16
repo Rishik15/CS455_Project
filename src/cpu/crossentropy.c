@@ -39,7 +39,7 @@ float crossentropy_forward(float *probs, float *losses, const float *logits,
         for (int v = 0; v < V; v++) {
             p[v] *= inv;
         }
-        losses[i] = -logf(p[targets[i]]);
+        losses[i] = maxv - z[targets[i]] + logf(sum);
         total += losses[i];
     }
     return (float)(total / N);

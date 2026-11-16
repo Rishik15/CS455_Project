@@ -32,15 +32,10 @@
 #define VOCAB_FILE "data/vocab.bin"
 #define MERGES_FILE "data/merges.bin"
 
-/*	These macros are redfined for testing
-	#define TRAIN_READ_BYTES (25L * 1024 * 1024)
-	#define TOKENIZER_CHARS 20000000L
-	#define TARGET_TOKENS 5000000L 
-*/
-
-#define TRAIN_READ_BYTES (2L * 1024 * 1024)
-#define TOKENIZER_CHARS 500000L
-#define TARGET_TOKENS 10000L
+/* Documented TinyStories training subset (whole stories, about 5M tokens). */
+#define TRAIN_READ_BYTES (25L * 1024 * 1024)
+#define TOKENIZER_CHARS 20000000L
+#define TARGET_TOKENS 5000000L
 
 #define VOCAB_SIZE 4096
 #define CHUNK_TOKENS (1 << 20)

@@ -15,8 +15,19 @@ SERIAL_SRCS = \
     src/cpu/residual.c \
     src/cpu/crossentropy.c \
     src/dataloader.c \
+    src/checkpoint.c
 
 train_serial: $(SERIAL_SRCS)
 	$(CC) $(CFLAGS) $(SERIAL_SRCS) -o train_serial $(LDFLAGS)
 
-.PHONY: train_serial
+prep_data: tools/prep_data.c tools/pretokenize.c tools/bpe_train.c src/utils.c
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test_checkpoint: tests/test_checkpoint.c $(filter-out train/train_serial.c,$(SERIAL_SRCS))
+	$(CC) $(CFLAGS) $^ -o /tmp/cs455-test-checkpoint $(LDFLAGS)
+	/tmp/cs455-test-checkpoint
+
+generate: sample/generate.c $(filter-out train/train_serial.c,$(SERIAL_SRCS))
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+.PHONY: train_serial prep_data test_checkpoint generate
