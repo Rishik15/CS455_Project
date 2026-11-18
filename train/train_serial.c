@@ -40,7 +40,7 @@ static int copy_file(const char *source, const char *destination) {
 
 int main(void) {
     const int B = 32, T = 256;
-    const double training_seconds = 30.0 * 60.0;
+    const int max_steps = 500;
     const float learning_rate = 0.001f;
     const uint64_t seed = 0xbad;
     const float weight_decay = 0.01f, epsilon = 1e-8f;
@@ -77,9 +77,8 @@ int main(void) {
     adamw_init(&optimizer, model.num_parameters, weight_decay, epsilon);
     DataLoader loader = {0};
     dataloader_init(&loader, "data/train.bin", B, T);
-    printf("Training: B=%d T=%d lr=%g tokens=%zu budget=%.1fs\n",
-           B, T, learning_rate, loader.num_tokens, training_seconds);
-    printf("Budget excludes setup and saving; a complete step may exceed the budget.\n");
+    printf("Training: B=%d T=%d lr=%g tokens=%zu budget=%d steps\n",
+               B, T, learning_rate, loader.num_tokens, max_steps);
 
     int steps = 0;
     float loss = 0;
@@ -96,7 +95,7 @@ int main(void) {
         adamw_update(&optimizer, model.grads_memory, model.params_memory, learning_rate);
         steps++;
         printf("Step %d | Loss: %.6f | Elapsed: %.3fs\n", steps, loss, time_seconds() - start);
-    } while (time_seconds() - start < training_seconds);
+    } while (steps < max_steps);
     double elapsed = time_seconds() - start;
     for (size_t i = 0; i < model.num_parameters; i++) {
         if (!isfinite(model.params_memory[i])) {

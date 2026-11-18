@@ -47,7 +47,6 @@ int main(int argc, char **argv) {
      */
     const int max_steps = 500;
     const int B = 32, T = 256;
-    const double training_seconds = 30.0 * 60.0;
     const float learning_rate = 0.001f;
     const uint64_t seed = 0xbad;
     const float weight_decay = 0.01f, epsilon = 1e-8f;
@@ -65,7 +64,9 @@ int main(int argc, char **argv) {
     int exit_early = 0;
 
     if (B%num_procs != 0) {
-        fprintf(stderr, "Could not evenly split batches\n");
+        if (my_rank == MASTER) {
+            fprintf(stderr, "Could not evenly split batches\n");
+        }
         MPI_Finalize();
         return EXIT_FAILURE;
     }
@@ -115,16 +116,17 @@ early_exit:
 
     if (my_rank == MASTER) {
         gpt_print_summary(&model);
-        printf("Training: B=%d T=%d lr=%g tokens=%zu budget=%.1fs\n",
-               B, T, learning_rate, loader.num_tokens, training_seconds);
-        printf("Budget excludes setup and saving; a complete step may exceed the budget.\n");
+        printf("Training: B=%d T=%d lr=%g tokens=%zu budget=%d steps\n",
+               B, T, learning_rate, loader.num_tokens, max_steps);
     }
 
     int steps = 0;
     float loss = 0;
-    double start = time_seconds();
     int flag;
     int local_flag;
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start = time_seconds();
 
     do {
         local_flag = 0;
@@ -158,14 +160,12 @@ early_exit:
         steps++;
         if (my_rank==MASTER){
             printf("Step %d | Loss: %.6f | Elapsed: %.3fs\n", steps, loss, time_seconds() - start);
-            flag = steps<=max_steps;
         }
-        MPI_Bcast(&flag, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    } while (flag);
+    } while (steps<max_steps);
+    double elapsed = time_seconds() - start;
 
     if (my_rank == MASTER) {
-        double elapsed = time_seconds() - start;
         for (size_t i = 0; i < model.num_parameters; i++) {
             if (!isfinite(model.params_memory[i])) {
                 fprintf(stderr, "Non-finite parameter after update; checkpoint not saved.\n");
