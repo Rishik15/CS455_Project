@@ -61,6 +61,24 @@ void dataloader_next(DataLoader *dl) {
     dl->pos += B*T;
 }
 
+void dataloader_next_MPI(DataLoader *dl, int total_B, int rank) {
+    int B = dl->B;
+    int T = dl->T;
+
+    // if the current position is past the endpoint of the file, go back to the start
+    if (dl->pos+total_B*T+1 > dl->end) {
+        dl->pos = dl->start;
+    }
+
+    int offset = rank*B*T; // calculate the input offset at each rank
+    for (int i = 0; i < B*T; i++) {
+        dl->inputs[i] = dl->tokens[dl->pos+i+offset];
+        dl->targets[i] = dl->tokens[dl->pos+i+1+offset];
+    }
+    // Progress pos forward for next read
+    dl->pos += total_B*T;
+}
+
 void dataloader_reset(DataLoader *dl) {
     dl->pos = dl->start;
 }

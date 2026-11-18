@@ -1,3 +1,5 @@
 data/*.txt
 data/*.bin
 build/
+checkpoints/
+.idea/

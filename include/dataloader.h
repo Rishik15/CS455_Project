@@ -25,6 +25,9 @@ void dataloader_init(DataLoader *dl, const char *path, int B, int T);
 /* Fills inputs/targets with the next batch, wrapping to start when out of room. */
 void dataloader_next(DataLoader *dl);
 
+/*Fills inputs/targets with the next batch for each rank, wrapping to start when out of room for total batch.*/
+void dataloader_next_MPI(DataLoader *dl, int total_B, int rank);
+
 /* Moves back to the start, so validation sees the same batches each time. */
 void dataloader_reset(DataLoader *dl);
 
