@@ -11,6 +11,7 @@
 #include "checkpoint.h"
 #include "config.h"
 #include "dataloader.h"
+#include "eval.h"
 #include "model.h"
 #include "optimizer.h"
 #include "utils.h"
@@ -77,6 +78,8 @@ int main(void) {
     adamw_init(&optimizer, model.num_parameters, weight_decay, epsilon);
     DataLoader loader = {0};
     dataloader_init(&loader, "data/train.bin", B, T);
+    DataLoader val_loader = {0};
+    dataloader_init(&val_loader, "data/val.bin", B, T);
     printf("Training: B=%d T=%d lr=%g tokens=%zu budget=%d steps\n",
                B, T, learning_rate, loader.num_tokens, max_steps);
 
@@ -97,6 +100,11 @@ int main(void) {
         printf("Step %d | Loss: %.6f | Elapsed: %.3fs\n", steps, loss, time_seconds() - start);
     } while (steps < max_steps);
     double elapsed = time_seconds() - start;
+
+    // validation, timed separately so it isn't counted as training time
+    double val_start = time_seconds();
+    float val_loss = eval_loss(&model, &val_loader, VAL_BATCHES, B, 0);
+    double val_elapsed = time_seconds() - val_start;
     for (size_t i = 0; i < model.num_parameters; i++) {
         if (!isfinite(model.params_memory[i])) {
             fprintf(stderr, "Non-finite parameter after update; checkpoint not saved.\n");
@@ -107,9 +115,12 @@ int main(void) {
     printf("Saved weights: %s\n", checkpoint_path);
     printf("Completed %d steps in %.3fs (%.1f tokens/s). Final batch loss: %.6f\n",
            steps, elapsed, (double)steps * B * T / elapsed, loss);
+    printf("Validation: loss %.6f over %d tokens in %.3fs (%.1f tokens/s)\n",
+           val_loss, VAL_BATCHES * B * T, val_elapsed, (double)VAL_BATCHES * B * T / val_elapsed);
     status = EXIT_SUCCESS;
 cleanup:
     dataloader_free(&loader);
+    dataloader_free(&val_loader);
     adamw_free(&optimizer);
     gpt_free(&model);
     return status;

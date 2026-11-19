@@ -64,6 +64,22 @@ Order: headers, `src/`, `src/cpu/` in forward-pass order, then `tools/`.
   - With `B = 32`, `T = 256` and the current `train.bin` (5,000,319 tokens), one pass is 610 batches; the last 3,199 tokens don't fill a batch and are skipped.
   - `start` and `end` are always the whole file for now. MPI needs a way to set them per rank (see [04-remaining.md](04-remaining.md)).
 
+### `include/eval.h` and `src/eval.c`
+
+- **Purpose:** the validation loss at the end of a run: the mean loss over the first `VAL_BATCHES` (20) batches of `val.bin`. Forward passes only, so the weights are not changed.
+- **Used by:** `train/train_serial.c` and `train/train_mpi.c`, after the training loop and outside the training time.
+- **Functions:**
+
+| Function | What it does | Notes |
+|---|---|---|
+| `eval_loss(model, val, batches, total_B, rank)` | resets `val` to the start of the file, runs `gpt_forward` on `batches` batches, returns the mean loss | each rank takes its share of every batch through `dataloader_next_MPI`; serial passes `total_B = B`, `rank = 0` |
+
+- **Details that matter:**
+  - `val` must be built with the batch size the model was built for: `B` in serial, `local_B` in MPI.
+  - MPI: every rank calls `eval_loss`, then `MPI_Allreduce` (sum) divided by the number of ranks. Each rank averages over the same number of tokens, so this equals the serial number. It runs before the rank-0-only checkpoint block, since a collective after a rank-0-only `goto cleanup` would hang.
+  - The trainers print the loss and the forward-only tokens per second, which doubles as the inference speed measurement.
+  - `eval.h` has an `extern "C"` guard so the CUDA versions can call it.
+
 ### `include/model.h`
 
 - **Purpose:** the `GPT` object and its API.
@@ -411,5 +427,6 @@ Results from running the code during development:
 | gradient descent on one tiny batch | loss 3.0 to 0.32 in 60 steps |
 | one forward+backward over 256 tokens | about 0.8 s, single-threaded, `-O2` |
 | dataloader over `train.bin`, `B = 32`, `T = 256` | 610 batches per pass; every input matches the file and every target is the next token, including the wrap back to the start |
+| validation, `B = 8`, `T = 64`, after 6 steps | val loss 7.530832 for serial, MPI with 2 ranks and MPI with 4 ranks; running it twice gives the same number |
 
 `tests/test_ops.c` is still empty; the repeatable version of these checks goes there.

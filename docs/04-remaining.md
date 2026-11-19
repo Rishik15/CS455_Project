@@ -8,7 +8,7 @@ In order of implementation.
 4. **Optimizer** (`src/optimizer.c`, `include/optimizer.h`): AdamW over the flat `params_memory` and `grads_memory`.
 5. **Makefile:** targets `prep`, `serial`, `test`, `clean`, later `mpi`, `cuda`, `mpi_cuda`.
 6. **Tests** (`tests/test_ops.c`, `tests/test_tokenizer.c`): finite-difference gradient check per op and for the full model; `decode(encode(text)) == text`.
-7. **Serial training** (`train/train_serial.c`): training loop, validation (a fixed number of `val.bin` batches, the same in every version), sampling, checkpoint save.
+7. **Serial training** (`train/train_serial.c`): training loop, ~~validation (a fixed number of `val.bin` batches, the same in every version)~~, sampling, checkpoint save. Validation is done for serial and MPI: one final val loss over 20 batches, see `eval.c` in [03-files.md](03-files.md). The CUDA versions should call the same `eval_loss`.
 8. **Generation** (`sample/generate.c`): load a checkpoint and generate a story.
 9. **MPI training** (`train/train_mpi.c`): broadcast params, per-rank data, allreduce grads each step.
 10. **CUDA ops** (`src/cuda/`): the `ops.h` functions as kernels, matching the CPU versions.

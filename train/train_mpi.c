@@ -12,6 +12,7 @@
 #include "checkpoint.h"
 #include "config.h"
 #include "dataloader.h"
+#include "eval.h"
 #include "model.h"
 #include "optimizer.h"
 #include "utils.h"
@@ -113,6 +114,8 @@ early_exit:
     adamw_init(&optimizer, model.num_parameters, weight_decay, epsilon);
     DataLoader loader = {0};
     dataloader_init(&loader, "data/train.bin", local_B, T);
+    DataLoader val_loader = {0};
+    dataloader_init(&val_loader, "data/val.bin", local_B, T);
 
     if (my_rank == MASTER) {
         gpt_print_summary(&model);
@@ -155,8 +158,6 @@ early_exit:
 
         adamw_update(&optimizer, model.grads_memory, model.params_memory, learning_rate);
 
-        //TODO validation
-
         steps++;
         if (my_rank==MASTER){
             printf("Step %d | Loss: %.6f | Elapsed: %.3fs\n", steps, loss, time_seconds() - start);
@@ -164,6 +165,19 @@ early_exit:
 
     } while (steps<max_steps);
     double elapsed = time_seconds() - start;
+
+    // validation: each rank evaluates its share of the same batches serial uses,
+    // timed separately so it isn't counted as training time. It must run on every
+    // rank before the MASTER-only block below, which can goto cleanup.
+    MPI_Barrier(MPI_COMM_WORLD);
+    double val_start = time_seconds();
+    float local_val_loss = eval_loss(&model, &val_loader, VAL_BATCHES, B, my_rank);
+    float val_loss = 0;
+    // every rank averages over the same number of tokens, so sum / num_procs is the full average.
+    // the allreduce waits for the slowest rank, so val_elapsed covers it.
+    MPI_Allreduce(&local_val_loss, &val_loss, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+    val_loss /= num_procs;
+    double val_elapsed = time_seconds() - val_start;
 
     if (my_rank == MASTER) {
         for (size_t i = 0; i < model.num_parameters; i++) {
@@ -177,11 +191,14 @@ early_exit:
         printf("Saved weights: %s\n", checkpoint_path);
         printf("Completed %d steps in %.3fs (%.1f tokens/s). Final batch loss: %.6f\n",
                steps, elapsed, (double)steps * B * T / elapsed, loss);
+        printf("Validation: loss %.6f over %d tokens in %.3fs (%.1f tokens/s)\n",
+               val_loss, VAL_BATCHES * B * T, val_elapsed, (double)VAL_BATCHES * B * T / val_elapsed);
     }
     status = EXIT_SUCCESS;
 
 cleanup:
     dataloader_free(&loader);
+    dataloader_free(&val_loader);
     adamw_free(&optimizer);
     gpt_free(&model);
     MPI_Finalize();

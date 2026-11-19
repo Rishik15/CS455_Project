@@ -16,7 +16,8 @@ SERIAL_SRCS = \
     src/cpu/residual.c \
     src/cpu/crossentropy.c \
     src/dataloader.c \
-    src/checkpoint.c
+    src/checkpoint.c \
+    src/eval.c
 
 MPI_SRCS = \
 	train/train_mpi.c \
@@ -31,7 +32,8 @@ MPI_SRCS = \
     src/cpu/residual.c \
     src/cpu/crossentropy.c \
     src/dataloader.c \
-    src/checkpoint.c
+    src/checkpoint.c \
+    src/eval.c
 
 
 
